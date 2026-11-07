@@ -1,6 +1,17 @@
+"""Beijing Air Quality Forecast – giao diện Streamlit.
 
+Chạy:  streamlit run app.py
+Cần:   models/air_quality_rf_ensemble.pkl  (sinh bởi src/train_model.py)
+"""
 import os
+import sys
 from datetime import datetime
+
+# Cho phép đặt aq_core.py cạnh app.py hoặc ở thư mục cha (vd. dashboard/ hay gốc repo)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (_HERE, os.path.dirname(_HERE)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import joblib
 import requests
@@ -180,7 +191,7 @@ live0 = fetch_live()
 header(live0)
 
 if hasattr(st, "fragment"):
-    live = st.fragment(run_every=REFRESH_SECONDS)(live_section)()
+    st.fragment(run_every=REFRESH_SECONDS)(live_section)()
 else:
-    live = live_section()
-predict_section(live or live0)
+    live_section()
+predict_section(live0)
