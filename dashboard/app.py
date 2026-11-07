@@ -410,7 +410,7 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- dữ liệu
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_resource(ttl=20, show_spinner=False)
 def fetch_live():
     """Gọi API quan trắc. Dịch vụ free trên Render có thể 'ngủ' nên cho timeout dài."""
     try:
