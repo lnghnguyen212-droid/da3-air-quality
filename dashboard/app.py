@@ -985,20 +985,42 @@ def map_task(stations):
     frame["aqi_color"] = frame["AQI"].apply(_aqi_color)
     frame["value_text"] = frame[metric].map(lambda x: f"{x:.1f}")
     frame["when"] = ts.strftime("%d/%m/%Y %H:%M")
-    frame["radius"] = 2300
-    layer = pdk.Layer("ScatterplotLayer", frame,
-                      get_position="[longitude, latitude]", get_radius="radius",
-                      get_fill_color="aqi_color", get_line_color=[255,255,255,160],
-                      line_width_min_pixels=1, stroked=True, pickable=True, opacity=0.85)
-    # Nền tối/sáng, điểm có màu theo European AQI.
+    # Marker cố định theo pixel: không còn vòng tròn bán kính 2.3 km che bản đồ.
+    frame["marker_radius"] = 8
+    frame["marker_outline"] = 1.5
+    view_mode = st.radio("Hiển thị", ["Điểm AQI", "Bản đồ nhiệt", "Cả hai"],
+                         horizontal=True, key="map_view_mode")
+    layers = []
+    if view_mode in ("Bản đồ nhiệt", "Cả hai"):
+        # Heatmap là bề mặt nội suy trực quan từ điểm mẫu mô hình, KHÔNG phải quan trắc liên tục.
+        heat_data = frame.dropna(subset=[metric]).copy()
+        heat_data["heat_weight"] = heat_data[metric].clip(lower=0)
+        layers.append(pdk.Layer(
+            "HeatmapLayer", heat_data,
+            get_position="[longitude, latitude]", get_weight="heat_weight",
+            radius_pixels=55, intensity=0.65, threshold=0.08,
+            opacity=0.38, pickable=False,
+        ))
+    if view_mode in ("Điểm AQI", "Cả hai"):
+        layers.append(pdk.Layer(
+            "ScatterplotLayer", frame,
+            get_position="[longitude, latitude]",
+            get_radius="marker_radius", radius_units="pixels",
+            radius_min_pixels=6, radius_max_pixels=12,
+            get_fill_color="aqi_color", get_line_color=[235, 250, 255, 235],
+            line_width_min_pixels=1.5, stroked=True, filled=True,
+            pickable=True, opacity=0.94,
+        ))
     map_style = "dark" if style == "Nền tối" else "light"
-    deck = pdk.Deck(layers=[layer],
+    deck = pdk.Deck(layers=layers,
                     initial_view_state=pdk.ViewState(latitude=CITY_LAT, longitude=CITY_LON,
-                                                     zoom=10.1, pitch=35),
+                                                     zoom=10.1, pitch=0),
                     map_style=map_style,
-                    tooltip={"html": "<b>{site}</b><br/>AQI: {AQI}<br/>PM2.5: {PM2.5} µg/m³<br/>PM10: {PM10} µg/m³<br/>{when}<br/><i>Dự báo mô hình</i>",
+                    tooltip={"html": "<b>{site}</b><br/>AQI: {AQI}<br/>PM2.5: {PM2.5} µg/m³<br/>PM10: {PM10} µg/m³<br/>{when}<br/><i>Dữ liệu mô hình Open-Meteo</i>",
                              "style": {"backgroundColor": "#10252d", "color": "#e9fcff"}})
     st.pydeck_chart(deck, use_container_width=True, height=540)
+    if view_mode != "Điểm AQI":
+        st.caption("Lớp nhiệt chỉ là trực quan hóa làm mượt từ 25 điểm mẫu mô hình; không phản ánh đo đạc liên tục hay độ phân giải thực của nguồn dự báo.")
     st.caption("● Xanh: 0–20 · Xanh nhạt: 21–40 · Vàng: 41–60 · Cam: 61–80 · Đỏ: 81–100 · Tím: >100 (European AQI). Màu dựa trên AQI ngay cả khi xem PM2.5/PM10.")
     m1, m2, m3 = st.columns(3)
     m1.metric(f"{metric} thấp nhất", f"{frame[metric].min():.1f}")
