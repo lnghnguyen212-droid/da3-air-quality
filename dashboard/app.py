@@ -325,6 +325,12 @@ def pollutant_bars_html(values: dict) -> str:
 
 CSS = """
 <style>
+[data-testid="stSidebar"], [data-testid="collapsedControl"]{display:none!important}
+.location-caption{color:#62efd5;font-size:.73rem;letter-spacing:.18em;font-weight:700;margin:6px 0 9px}
+.location-note{border:1px solid rgba(98,239,213,.22);border-radius:13px;padding:13px 17px;background:rgba(16,42,53,.8);color:#a9cdd0;font-size:.85rem;min-height:48px}
+[data-testid="stSelectbox"]>div>div{background:#112b36!important;color:#eaffff!important;border:1px solid #3b777a!important;border-radius:12px!important}
+[data-testid="stSelectbox"] svg{color:#62efd5!important}
+
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 :root{--bg:#050d15;--card:#101d29;--line:rgba(150,220,235,.16);--txt:#ecfcff;--mut:#91a9b8;--acc:#62efd5}
 html{scroll-behavior:smooth}
@@ -423,20 +429,23 @@ VN_CITIES = {
     "Tây Ninh": (11.3100, 106.0983),
     "Đồng Nai (Biên Hòa)": (10.9447, 106.8243),
 }
-with st.sidebar:
-    st.markdown("### ◉ Khu vực dự báo")
-    SELECTED_CITY = st.selectbox("Chọn tỉnh/thành hoặc đô thị", list(VN_CITIES), index=0)
-    st.caption("Dữ liệu mô hình Open-Meteo tại tọa độ đại diện; không phải số đo trạm thực.")
+# Bộ chọn được đặt trong nội dung chính, không dùng sidebar.
+st.markdown("""<div class="location-caption">◉ AIRVISION / LOCATION INTELLIGENCE</div>""", unsafe_allow_html=True)
+loc_col, info_col = st.columns([1.1, 2.2], gap="medium")
+with loc_col:
+    SELECTED_CITY = st.selectbox("Khu vực dự báo", list(VN_CITIES), index=0, label_visibility="collapsed")
+with info_col:
+    st.markdown('<div class="location-note">✦ Chọn khu vực để cập nhật AQI, thời tiết, bản đồ và dự báo · Nguồn mô hình Open-Meteo</div>', unsafe_allow_html=True)
 CITY_LAT, CITY_LON = VN_CITIES[SELECTED_CITY]
 
 
 
 # ---------------------------------------------------------------- dữ liệu
 @st.cache_resource(ttl=20, show_spinner=False)
-def fetch_live(city_name=None):
+def fetch_live(city_name):
     """Đọc chất lượng không khí hiện tại từ Open-Meteo tại Đà Nẵng; không giả là trạm quan trắc."""
     if not API_LATEST:
-        return _danang_live()
+        return _danang_live(city_name)
     try:
         res = requests.get(API_LATEST, timeout=25)
         res.raise_for_status()
@@ -459,22 +468,37 @@ def load_model():
 def header(live: Live):
     state = "" if live.ok else " off"
     when = live.time or datetime.now().strftime("%d/%m/%Y %H:%M")
-    text = f"Trực tuyến · {when}" if live.ok else "Chưa có dữ liệu trạm"
+    text = f"Trực tuyến · {when}" if live.ok else "Chưa có dữ liệu mô hình"
     st.markdown(
         f"""<div class="brand">
   <div><h1>✦ AirVision <b>AI</b></h1>
-  <small>BEIJING AIR INTELLIGENCE · Random Forest &amp; Ensemble Learning</small></div>
+  <small>VIETNAM AIR INTELLIGENCE · Real-time models &amp; Ensemble Learning</small></div>
   <div class="live"><span class="dot{state}"></span>{text}</div></div>""",
         unsafe_allow_html=True,
     )
 
 
 # ---------------------------------------------------------------- khối realtime
+def european_category(aqi):
+    if aqi is None or pd.isna(aqi):
+        return {"label": "Chưa có dữ liệu", "color": "#64748b", "advice": "Chưa có European AQI."}
+    if aqi <= 20:
+        return {"label": "Tốt", "color": "#28d79b", "advice": "Chất lượng không khí tốt theo European AQI."}
+    if aqi <= 40:
+        return {"label": "Khá", "color": "#a4d65e", "advice": "Chất lượng không khí tương đối tốt."}
+    if aqi <= 60:
+        return {"label": "Trung bình", "color": "#f6c85f", "advice": "Nhóm nhạy cảm nên chú ý khi hoạt động ngoài trời."}
+    if aqi <= 80:
+        return {"label": "Kém", "color": "#f29a5b", "advice": "Nên cân nhắc giảm hoạt động ngoài trời kéo dài."}
+    if aqi <= 100:
+        return {"label": "Rất kém", "color": "#e76672", "advice": "Nên hạn chế hoạt động ngoài trời."}
+    return {"label": "Cực kỳ kém", "color": "#b26cce", "advice": "Nên tránh hoạt động ngoài trời khi có thể."}
+
 def live_section():
     live = fetch_live(SELECTED_CITY)
     v = live.values
     aqi = v.get("AQI")
-    cat = category(aqi)
+    cat = european_category(aqi)
 
     if not live.ok:
         st.warning(live.message or "Chưa nhận được dữ liệu từ trạm. Dịch vụ có thể đang khởi động, thử lại sau ít phút.")
@@ -483,7 +507,7 @@ def live_section():
     left, right = st.columns([1.15, 1], gap="medium")
     with left:
         st.markdown(
-            f"""<div class="card"><h3>Chất lượng không khí hiện tại{f' · {live.station}' if live.station else ''}</h3>
+            f"""<div class="card"><h3>Chất lượng không khí hiện tại · European AQI{f' · {live.station}' if live.station else ''}</h3>
 <div class="hero">{gauge_svg(aqi)}
 <div><span class="pill" style="background:{cat['color']}">{cat['label']}</span>
 <div class="advice">{cat['advice']}</div></div></div></div>""",
@@ -666,18 +690,39 @@ def _danang_air_data(city_name):
     response.raise_for_status()
     return response.json()
 
-def _danang_live():
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _weather_now(city_name):
+    lat, lon = VN_CITIES[city_name]
+    response = requests.get(WEATHER_URL, params={
+        "latitude": lat, "longitude": lon,
+        "current": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+        "wind_speed_unit": "ms", "timezone": "Asia/Ho_Chi_Minh",
+    }, timeout=25)
+    response.raise_for_status()
+    return response.json().get("current", {})
+
+def _danang_live(city_name):
     try:
-        payload = _danang_air_data(SELECTED_CITY)
+        payload = _danang_air_data(city_name)
         current = payload.get("current", {})
         names = {"pm2_5":"PM2.5", "pm10":"PM10", "nitrogen_dioxide":"NO2", "sulphur_dioxide":"SO2", "ozone":"O3", "carbon_monoxide":"CO"}
         vals = {out:float(current[key]) for key,out in names.items() if current.get(key) is not None}
-        # Không đưa European AQI vào công thức AQI HJ của mã gốc.
-        live = Live(values=vals, station=f"{SELECTED_CITY} · điểm tham chiếu mô hình", time=current.get("time"), ok="PM2.5" in vals)
+        # AQI này là European AQI (không dùng ngưỡng Trung Quốc của RF).
+        if current.get("european_aqi") is not None:
+            vals["AQI"] = float(current["european_aqi"])
+        try:
+            weather = _weather_now(city_name)
+            weather_names = {"temperature_2m": "TEMP", "relative_humidity_2m": "HUMIDITY", "wind_speed_10m": "WSPM"}
+            vals.update({out: float(weather[key]) for key, out in weather_names.items() if weather.get(key) is not None})
+        except requests.RequestException:
+            pass  # Thời tiết có thể tạm lỗi; không điền giá trị giả.
+        live = Live(values=vals, station=f"{city_name} · điểm tham chiếu mô hình", time=current.get("time"), ok="PM2.5" in vals)
         if not live.ok: live.message="Nguồn Open-Meteo chưa có PM2.5 tại khu vực được chọn."
         return live
     except Exception as exc:
-        return Live(message=f"Không lấy được dữ liệu {SELECTED_CITY} từ Open-Meteo ({type(exc).__name__}).")
+        return Live(message=f"Không lấy được dữ liệu {city_name} từ Open-Meteo ({type(exc).__name__}).")
 
 def _danang_forecast():
     try:
@@ -958,7 +1003,7 @@ with st.expander("◉ Trạng thái dữ liệu tự động", expanded=False):
     now_pred, now_error = _live_model_now(live0)
     if now_pred is not None:
         st.metric("PM2.5 ước tính bằng Random Forest · điều kiện hiện tại", f"{now_pred.pm25:.1f} µg/m³")
-        st.caption("Mô hình huấn luyện trên Bắc Kinh, không được xác nhận độ chính xác cho Đà Nẵng. Đây không phải dự báo 24 giờ hay 7 ngày.")
+        st.caption("Mô hình huấn luyện trên Bắc Kinh, không được xác nhận độ chính xác cho địa phương đã chọn. Đây không phải dự báo 24 giờ hay 7 ngày.")
     elif now_error:
         st.caption(f"Dự đoán tự động hiện tại chưa sẵn sàng: {now_error}")
     if not FORECAST_API:
