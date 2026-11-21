@@ -325,47 +325,43 @@ def pollutant_bars_html(values: dict) -> str:
 
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
-:root{--bg:#f4f8fc;--card:#ffffff;--line:#e2eaf3;--txt:#18324d;--mut:#72869b;--acc:#087f91}
-.stApp{background:linear-gradient(135deg,#edfaff 0%,#f7f9ff 45%,#f3fff8 100%);color:var(--txt)}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+:root{--bg:#050d15;--card:#101d29;--line:rgba(150,220,235,.16);--txt:#ecfcff;--mut:#91a9b8;--acc:#62efd5}
+html{scroll-behavior:smooth}
+.stApp{background:radial-gradient(ellipse 65% 28% at 82% 4%,#144c5d 0%,transparent 85%),radial-gradient(ellipse 70% 45% at -15% 65%,#0a2935 0%,transparent 80%),#050d15;color:var(--txt)}
+.stApp:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background-image:linear-gradient(#b9faff06 1px,transparent 1px),linear-gradient(90deg,#b9faff06 1px,transparent 1px);background-size:68px 68px;mask-image:linear-gradient(to bottom,#000,transparent 75%)}
 #MainMenu,footer,header[data-testid="stHeader"]{visibility:hidden;height:0}
-.block-container{max-width:1320px;padding-top:1.6rem;padding-bottom:4rem}
-html,body,h1,h2,h3,p,label,span,div,button{font-family:'DM Sans','Segoe UI',sans-serif}
-.brand{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:1.2rem;padding:18px 24px;background:#fff;border:1px solid var(--line);border-radius:20px;box-shadow:0 8px 30px #18324d0a}
-.brand h1{font-size:1.6rem;font-weight:800;margin:0;color:var(--txt);letter-spacing:-.035em}
-.brand h1 b{color:var(--acc)}
-.brand small{display:block;color:var(--mut);font-size:.83rem;font-weight:500;margin-top:4px}
-.live{display:flex;align-items:center;gap:8px;font-size:.8rem;color:#257084;background:#e8f8f7;border:1px solid #c9eae5;padding:9px 14px;border-radius:999px;white-space:nowrap}
-.dot{width:9px;height:9px;border-radius:50%;background:#12b981;box-shadow:0 0 0 4px #12b98122}.dot.off{background:#f59e0b;box-shadow:none}
-.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 8px 26px #18324d08}
-.card h3{font-size:.8rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#67819b;margin:0 0 16px}
-.hero{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.g-val{font-size:44px;font-weight:800;fill:var(--txt)}.g-lbl{font-size:12px;fill:var(--mut);letter-spacing:.14em}
-.pill{display:inline-block;padding:7px 14px;border-radius:999px;font-weight:800;font-size:.82rem;color:#fff}
-.advice{color:var(--mut);font-size:.9rem;line-height:1.6;max-width:320px;margin-top:12px}
-.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
-.kpi{background:#fff;border:1px solid var(--line);border-top:3px solid var(--accent);border-radius:18px;padding:20px;box-shadow:0 7px 20px #18324d07}
-.kpi-l{color:var(--mut);font-size:.84rem;font-weight:600}.kpi-v{font-size:2rem;font-weight:800;margin-top:7px;color:var(--txt)}
-.kpi-u{font-size:.8rem;font-weight:500;color:var(--mut);margin-left:5px}.kpi-h{color:var(--mut);font-size:.74rem;margin-top:4px;min-height:1em}
-.pb{display:grid;grid-template-columns:65px 1fr 130px;align-items:center;gap:14px;margin:14px 0;font-size:.9rem}
-.pb-n{color:var(--txt);font-weight:700}.pb-v{text-align:right;color:var(--txt);font-weight:600}.pb-v i{color:var(--mut);font-style:normal;font-size:.72rem}
-.pb-t{height:10px;border-radius:99px;background:#ecf1f6;overflow:hidden}.pb-f{height:100%;border-radius:99px}
-.muted{color:var(--mut);font-size:.9rem}.result{display:flex;gap:32px;flex-wrap:wrap;align-items:center}
-.r-big{font-size:3.2rem;font-weight:800;line-height:1;color:var(--txt)}.r-big span{font-size:1rem;color:var(--mut);font-weight:500;margin-left:6px}
-.r-sub{color:var(--mut);font-size:.9rem;margin-top:10px}.range{margin-top:20px;max-width:520px}
-.rg-t{position:relative;height:9px;border-radius:99px;background:#edf1f6}.rg-b{position:absolute;top:0;height:100%;border-radius:99px;opacity:.9}
-.rg-m{position:absolute;top:-4px;width:3px;height:17px;border-radius:2px;background:#203c56}.rg-l{display:flex;justify-content:space-between;color:var(--mut);font-size:.75rem;margin-top:8px}
-.note{color:var(--mut);font-size:.79rem;margin-top:15px;line-height:1.6}
-div[data-testid="stForm"]{background:#fff;border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 8px 26px #18324d08}
-.stButton>button,div[data-testid="stFormSubmitButton"]>button{border-radius:12px;font-weight:700;border:1px solid #d7e4ee;min-height:44px}
-div[data-testid="stFormSubmitButton"]>button[kind="primary"],.stButton>button[kind="primary"]{background:linear-gradient(110deg,#087f91,#14ad9a);color:#fff;border:none}
-.sec{font-size:1.22rem;font-weight:800;margin:2rem 0 1rem;color:var(--txt)}
-.hero-banner{background:linear-gradient(110deg,#0c7e95,#13b69e);color:white;border-radius:22px;padding:27px 32px;margin:10px 0 22px;box-shadow:0 12px 28px #087f9126}
-.hero-banner .eyebrow{font-size:.76rem;letter-spacing:.15em;font-weight:800;opacity:.85}
-.hero-banner h2{font-size:1.65rem;color:white;font-weight:800;margin:8px 0}.hero-banner p{margin:0;color:#e2fff7;font-size:.92rem}
-.lab-intro{background:linear-gradient(115deg,#fff,#edfaf9);border:1px solid #ccece8;border-radius:18px;padding:20px 24px;margin:6px 0 16px}
-.lab-intro h3{margin:0 0 7px;color:#086d7b}.lab-intro p{margin:0;color:#607c8d;font-size:.9rem}
-@media(max-width:720px){.brand{flex-direction:column;align-items:flex-start}.pb{grid-template-columns:50px 1fr 105px}.hero-banner{padding:22px}.block-container{padding-left:1rem;padding-right:1rem}}
+.block-container{max-width:1400px;padding:1.2rem 2.5rem 5rem;position:relative;z-index:1}
+html,body,p,label,span,div,button{font-family:'DM Sans',sans-serif}
+h1,h2,h3,.sec,.r-big,.kpi-v{font-family:'Space Grotesk',sans-serif}
+.brand{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:1.5rem;padding:16px 0;border-bottom:1px solid var(--line)}
+.brand h1{font-size:1.45rem;font-weight:700;margin:0;letter-spacing:-.05em;color:var(--txt)}.brand h1 b{color:var(--acc)}
+.brand small{display:block;color:var(--mut);font-size:.76rem;letter-spacing:.02em;margin-top:4px}
+.live{display:flex;align-items:center;gap:9px;font-size:.77rem;color:#b3fff1;background:#122e34;border:1px solid #36756b;padding:9px 15px;border-radius:99px;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:#62efd5;box-shadow:0 0 14px #62efd5;animation:pulse 2s infinite}.dot.off{background:#f6b55e;animation:none}
+@keyframes pulse{50%{opacity:.4;box-shadow:0 0 24px #62efd5}}
+.card,.kpi,div[data-testid="stForm"]{background:linear-gradient(145deg,rgba(25,48,61,.92),rgba(9,22,33,.95));border:1px solid var(--line);border-radius:20px;box-shadow:0 20px 60px #0003;backdrop-filter:blur(16px);transition:transform .3s,border-color .3s,box-shadow .3s}
+.card:hover,.kpi:hover{transform:translateY(-4px);border-color:#62efd56b;box-shadow:0 22px 70px #1edac31b}
+.card{padding:26px}.card h3{font-size:.76rem;letter-spacing:.16em;text-transform:uppercase;color:#b2d4d9;margin:0 0 20px}
+.hero{display:flex;align-items:center;gap:20px;flex-wrap:wrap}.g-val{font-size:44px;font-weight:700;fill:var(--txt)}.g-lbl{font-size:12px;fill:var(--mut)}
+.pill{display:inline-block;padding:7px 14px;border-radius:99px;font-weight:700;font-size:.82rem;color:#07121a}.advice{color:#b0c5cf;font-size:.91rem;line-height:1.7;max-width:340px;margin-top:12px}
+.kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.kpi{padding:20px;border-top:2px solid var(--accent)}.kpi-l{color:var(--mut);font-size:.8rem}.kpi-v{font-size:2rem;font-weight:700;color:var(--txt);margin-top:9px}.kpi-u{font-size:.8rem;color:var(--mut);margin-left:5px}.kpi-h{font-size:.72rem;color:var(--mut);min-height:1em}
+.pb{display:grid;grid-template-columns:65px 1fr 132px;align-items:center;gap:14px;margin:15px 0;font-size:.89rem}.pb-n,.pb-v{color:var(--txt);font-weight:600}.pb-v{text-align:right}.pb-v i{color:var(--mut);font-style:normal;font-size:.7rem}.pb-t{height:8px;border-radius:99px;background:#ffffff17;overflow:hidden}.pb-f{height:100%;border-radius:99px;box-shadow:0 0 15px currentColor}
+.muted,.r-sub,.note{color:var(--mut)}.result{display:flex;gap:30px;flex-wrap:wrap;align-items:center}.r-big{font-size:3.3rem;font-weight:700;color:var(--txt)}.r-big span{font-size:1rem;color:var(--mut);font-weight:400;margin-left:5px}.r-sub{margin-top:9px}.range{margin-top:18px;max-width:520px}.rg-t{position:relative;height:9px;border-radius:99px;background:#ffffff20}.rg-b{position:absolute;top:0;height:100%;border-radius:99px}.rg-m{position:absolute;top:-4px;width:3px;height:17px;background:white}.rg-l{display:flex;justify-content:space-between;color:var(--mut);font-size:.75rem;margin-top:8px}.note{font-size:.8rem;margin-top:14px;line-height:1.7}
+.sec{font-size:1.45rem;font-weight:700;margin:2.8rem 0 1.1rem;color:var(--txt);letter-spacing:-.04em}
+div[data-testid="stForm"]{padding:24px}.stButton>button,div[data-testid="stFormSubmitButton"]>button{border-radius:12px;font-weight:700;border:1px solid #40717a;background:#132b37;color:#e9ffff;min-height:46px;transition:all .25s}.stButton>button:hover{border-color:#62efd5;color:#62efd5;transform:translateY(-2px)}
+div[data-testid="stFormSubmitButton"]>button[kind="primary"],.stButton>button[kind="primary"]{background:#62efd5;color:#06181c;border:none}
+[data-testid="stNumberInput"] input,[data-testid="stTextInput"] input{background:#0b1c29;color:#fff}
+.lab-intro{background:linear-gradient(115deg,#102b35,#102028);border:1px solid #3d7779;border-radius:18px;padding:24px;margin:6px 0 16px}.lab-intro h3{margin:0 0 8px;color:#82ffe3}.lab-intro p{margin:0;color:#aecbd0;font-size:.9rem}
+.immersive{min-height:480px;display:grid;grid-template-columns:1.15fr 1fr;align-items:center;position:relative;overflow:hidden;border-bottom:1px solid var(--line);margin:0 0 36px;padding:40px 22px 52px}
+.immersive-copy{position:relative;z-index:2}.eyebrow{font-size:.75rem;font-weight:700;letter-spacing:.28em;color:#62efd5;margin-bottom:22px}.immersive h2{font-family:'Space Grotesk',sans-serif;font-size:clamp(3rem,5.4vw,6.5rem);line-height:.99;letter-spacing:-.085em;font-weight:700;color:#f0feff;margin:0 0 24px}.immersive h2 em{font-style:normal;color:#62efd5}.immersive p{font-size:1rem;color:#b1c7d0;max-width:510px;line-height:1.8}.hero-tags{display:flex;flex-wrap:wrap;gap:9px;margin-top:26px}.hero-tags span{border:1px solid #ffffff3a;border-radius:99px;padding:9px 13px;font-size:.73rem;letter-spacing:.05em;color:#c7e6e8}
+.planet-wrap{position:relative;height:410px;display:grid;place-items:center;isolation:isolate}.planet{width:min(31vw,355px);height:min(31vw,355px);min-width:245px;min-height:245px;border-radius:50%;position:relative;background:radial-gradient(circle at 29% 24%,#c6fff9 0%,#64dfd2 9%,#197d9c 29%,#123e61 51%,#051827 73%);box-shadow:inset -33px -24px 55px #000a,inset 18px 10px 28px #c7fffa70,0 0 75px #22cfbf36,0 0 160px #1a8fa42a;animation:float 7s ease-in-out infinite}
+.planet:before{content:"";position:absolute;inset:-14%;border:1px solid #7de8e348;border-radius:50%;transform:rotate(-26deg) scaleY(.48);box-shadow:0 0 28px #62efd52b;animation:orbit 18s linear infinite}.planet:after{content:"";position:absolute;inset:12%;border-radius:50%;background:repeating-radial-gradient(ellipse at 20% 40%,transparent 0 16px,#c6ffff16 17px 18px,transparent 19px 30px);transform:rotate(26deg)}
+.orbit-two{position:absolute;width:96%;height:58%;border:1px dashed #80f7e13c;border-radius:50%;transform:rotate(34deg);animation:orbit 25s linear infinite}.orbit-dot{position:absolute;right:12%;top:13%;height:9px;width:9px;background:#abfff4;border-radius:50%;box-shadow:0 0 23px #6effe6}.planet-label{position:absolute;bottom:12px;right:4px;color:#8fcacb;font-size:.67rem;letter-spacing:.22em}
+@keyframes float{50%{transform:translateY(-16px) rotate(3deg)}}@keyframes orbit{50%{transform:rotate(154deg) scaleY(.48)}100%{transform:rotate(334deg) scaleY(.48)}}
+.ticker{overflow:hidden;white-space:nowrap;color:#6debd8;border-top:1px solid #ffffff1b;border-bottom:1px solid #ffffff1b;padding:14px 0;font-size:.76rem;letter-spacing:.21em;margin:0 0 26px}.ticker span{display:inline-block;animation:marquee 24s linear infinite}@keyframes marquee{to{transform:translateX(-50%)}}
+@media(max-width:850px){.immersive{grid-template-columns:1fr;min-height:auto;padding:32px 0}.planet-wrap{height:330px}.planet{width:260px;height:260px}.block-container{padding:1rem 1rem 3rem}.brand{flex-wrap:wrap}.pb{grid-template-columns:50px 1fr 105px}.immersive h2{font-size:3.6rem}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 </style>
 """
 
@@ -401,7 +397,7 @@ API_LATEST = os.getenv(
 MODEL_PATH = os.getenv("AQ_MODEL_PATH", "models/air_quality_rf_ensemble.pkl")
 REFRESH_SECONDS = 30
 
-st.set_page_config(page_title="Beijing Air Quality Forecast", page_icon="🍃", layout="wide")
+st.set_page_config(page_title="AirVision AI | See the Invisible", page_icon="🍃", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
 
@@ -616,7 +612,7 @@ def scenario_lab(live: Live):
 # ---------------------------------------------------------------- chạy
 live0 = fetch_live()
 header(live0)
-st.markdown("""<div class="hero-banner"><div class="eyebrow">ENVIRONMENTAL INTELLIGENCE PLATFORM</div><h2>Hiểu không khí hôm nay. Khám phá kịch bản ngày mai.</h2><p>Quan trắc trực tuyến · Dự báo bằng học máy · Thử nghiệm các điều kiện môi trường với AI Scenario Lab</p></div>""", unsafe_allow_html=True)
+st.markdown("""<section class="immersive"><div class="immersive-copy"><div class="eyebrow">✦ AIRVISION AI / ENVIRONMENTAL INTELLIGENCE</div><h2>SEE THE<br><em>INVISIBLE.</em></h2><p>Khám phá những gì đang diễn ra trong bầu không khí. Quan trắc trực tuyến, dự báo PM2.5 bằng học máy và thử nghiệm tương lai qua AI Scenario Lab.</p><div class="hero-tags"><span>01 / LIVE MONITORING</span><span>02 / RANDOM FOREST</span><span>03 / SCENARIO LAB</span></div></div><div class="planet-wrap" aria-label="Quả cầu khí quyển chuyển động"><div class="orbit-two"></div><div class="planet"></div><div class="orbit-dot"></div><div class="planet-label">ATMOSPHERIC SYSTEM / 001</div></div></section><div class="ticker"><span>✦ AIR QUALITY INTELLIGENCE &nbsp;&nbsp;&nbsp; ◉ REAL-TIME ENVIRONMENT &nbsp;&nbsp;&nbsp; ✦ MACHINE LEARNING FORECAST &nbsp;&nbsp;&nbsp; ◉ EXPLORE THE INVISIBLE &nbsp;&nbsp;&nbsp; ✦ AIR QUALITY INTELLIGENCE &nbsp;&nbsp;&nbsp; ◉ REAL-TIME ENVIRONMENT &nbsp;&nbsp;&nbsp; ✦ MACHINE LEARNING FORECAST &nbsp;&nbsp;&nbsp; ◉ EXPLORE THE INVISIBLE &nbsp;&nbsp;&nbsp;</span></div>""", unsafe_allow_html=True)
 
 if hasattr(st, "fragment"):
     st.fragment(run_every=REFRESH_SECONDS)(live_section)()
