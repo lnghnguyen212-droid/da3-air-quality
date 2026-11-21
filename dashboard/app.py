@@ -395,6 +395,7 @@ from datetime import datetime
 import joblib
 import requests
 import streamlit as st
+import pydeck as pdk
 
 
 API_LATEST = os.getenv(
@@ -898,33 +899,119 @@ def overview_task(live, forecast):
         st.info("Biểu đồ 24 giờ và giờ vàng sẽ xuất hiện khi hệ thống kết nối được API dự báo theo giờ.")
 
 
-def map_task(stations):
-    st.markdown('<div class="sec">02 / Bản đồ chất lượng không khí</div>', unsafe_allow_html=True)
-    st.caption(f"Vị trí tham chiếu mô hình tại {SELECTED_CITY}. Không phải trạm đo thực tế; chỉ hiển thị số đo trạm khi có API trạm riêng.")
-    required = {"station", "latitude", "longitude"}
-    if stations.empty or not required.issubset(stations.columns):
-        st.info("Chưa có danh sách trạm kèm tọa độ. Cần API nhiều trạm hoặc cấu hình AQ_STATION_LAT / AQ_STATION_LON cho trạm hiện tại.")
-        return
-    options = [c for c in ("AQI", "PM2.5") if c in stations]
-    if not options:
-        st.map(stations.rename(columns={"latitude":"lat", "longitude":"lon"})[["lat","lon"]], zoom=10, use_container_width=True)
-        st.info(f"Đang hiển thị vị trí tham chiếu {SELECTED_CITY}. Chưa có dữ liệu đo từ các trạm thực tế.")
-        return
-    metric = st.radio("Chỉ số bản đồ", options, horizontal=True, key="map_metric")
-    stations = stations.dropna(subset=["latitude", "longitude", metric]).sort_values(metric, ascending=False)
-    if stations.empty:
-        st.warning("Không có trạm hợp lệ để hiển thị.")
-        return
-    left, right = st.columns([1, 2.2], gap="large")
-    with left:
-        selected = st.selectbox("Trạm quan trắc", stations["station"].astype(str).tolist(), key="selected_station")
-        st.dataframe(stations[["station", metric]].rename(columns={"station":"Trạm"}), hide_index=True, use_container_width=True)
-        station_row = stations[stations["station"].astype(str) == selected].iloc[0]
-        st.metric(f"{metric} · {selected}", f"{station_row[metric]:.1f}")
-    with right:
-        st.map(stations.rename(columns={"latitude":"lat", "longitude":"lon"})[["lat", "lon"]], zoom=10, use_container_width=True)
-    st.caption("Điểm trên bản đồ lấy từ tọa độ trong nguồn dữ liệu; bản đồ không tự tạo số đo cho các khu vực chưa có trạm.")
+# AirVision Map Explorer: dự báo mô hình trên lưới tọa độ, KHÔNG phải trạm quan trắc.
+MAP_METRICS = {"AQI": "european_aqi", "PM2.5": "pm2_5", "PM10": "pm10"}
 
+def _aqi_color(aqi):
+    if pd.isna(aqi): return [130, 145, 160, 180]
+    if aqi <= 20: return [31, 190, 124, 215]
+    if aqi <= 40: return [124, 209, 85, 215]
+    if aqi <= 60: return [242, 195, 56, 215]
+    if aqi <= 80: return [247, 139, 56, 215]
+    if aqi <= 100: return [220, 71, 88, 215]
+    return [141, 70, 174, 215]
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _map_grid(city_name):
+    """5×5 điểm dự báo quanh tâm thành phố, gọi API Open-Meteo theo lô.
+    Kết quả là dữ liệu mô hình nội suy tại tọa độ, không phải số đo trạm.
+    """
+    lat, lon = VN_CITIES[city_name]
+    # Khoảng cách xấp xỉ 5–6 km theo chiều Bắc–Nam, Đông–Tây ở vĩ độ Việt Nam.
+    lat_steps = [-0.10, -0.05, 0, 0.05, 0.10]
+    lon_scale = max(0.4, __import__('math').cos(__import__('math').radians(lat)))
+    coords = [(round(lat + dy, 5), round(lon + dx / lon_scale, 5), i, j)
+              for i, dy in enumerate(lat_steps) for j, dx in enumerate(lat_steps)]
+    params = {
+        "latitude": ",".join(str(c[0]) for c in coords),
+        "longitude": ",".join(str(c[1]) for c in coords),
+        "hourly": "european_aqi,pm2_5,pm10",
+        "timezone": "Asia/Ho_Chi_Minh", "forecast_days": 2,
+    }
+    r = requests.get(AIR_URL, params=params, timeout=35)
+    r.raise_for_status()
+    payload = r.json()
+    if isinstance(payload, dict): payload = [payload]
+    records = []
+    for (lat0, lon0, i, j), site in zip(coords, payload):
+        hourly = site.get("hourly", {})
+        times = hourly.get("time", [])
+        for k, ts in enumerate(times):
+            records.append({"latitude": lat0, "longitude": lon0,
+                            "site": f"Điểm mô hình {i+1}-{j+1}", "timestamp": ts,
+                            **{metric: (hourly.get(field) or [None] * len(times))[k]
+                               for metric, field in MAP_METRICS.items()}})
+    frame = pd.DataFrame(records)
+    if frame.empty: return frame
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+    for metric in MAP_METRICS: frame[metric] = pd.to_numeric(frame[metric], errors="coerce")
+    return frame.dropna(subset=["timestamp"])
+
+
+def map_task(stations):
+    st.markdown('<div class="sec">02 / AIRVISION MAP EXPLORER</div>', unsafe_allow_html=True)
+    st.caption(f"Khám phá chất lượng không khí tại {SELECTED_CITY} · lưới dự báo Open-Meteo · European AQI. Các điểm màu là giá trị mô hình, KHÔNG phải trạm đo.")
+    try:
+        grid = _map_grid(SELECTED_CITY)
+    except Exception as exc:
+        st.error(f"Chưa tải được bản đồ dự báo từ Open-Meteo ({type(exc).__name__}). Hãy thử lại sau.")
+        return
+    if grid.empty:
+        st.warning("API chưa cung cấp dữ liệu dự báo theo tọa độ.")
+        return
+    now = pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").tz_localize(None)
+    available = sorted(grid["timestamp"].dropna().unique())
+    future = [t for t in available if pd.Timestamp(t) >= now.floor("h")]
+    if not future: future = available
+    offsets = [0, 3, 6, 12, 24]
+    valid_offsets = [h for h in offsets if h < len(future)]
+    if not valid_offsets:
+        st.warning("Không có khung giờ dự báo hợp lệ.")
+        return
+    c1, c2, c3 = st.columns([1, 1.2, 1.4])
+    with c1:
+        metric = st.selectbox("Lớp dữ liệu", list(MAP_METRICS), key="map_layer")
+    with c2:
+        hour = st.select_slider("Mốc dự báo", options=valid_offsets,
+                                format_func=lambda h: "Hiện tại" if h == 0 else f"+{h} giờ",
+                                key="map_forecast_hour")
+    with c3:
+        style = st.selectbox("Kiểu bản đồ", ["Nền tối", "Nền sáng"], key="map_style")
+    ts = pd.Timestamp(future[hour])
+    frame = grid[grid["timestamp"] == ts].dropna(subset=[metric]).copy()
+    if frame.empty:
+        st.info("Chưa có giá trị cho chỉ số và mốc giờ đã chọn.")
+        return
+    frame["aqi_color"] = frame["AQI"].apply(_aqi_color)
+    frame["value_text"] = frame[metric].map(lambda x: f"{x:.1f}")
+    frame["when"] = ts.strftime("%d/%m/%Y %H:%M")
+    frame["radius"] = 2300
+    layer = pdk.Layer("ScatterplotLayer", frame,
+                      get_position="[longitude, latitude]", get_radius="radius",
+                      get_fill_color="aqi_color", get_line_color=[255,255,255,160],
+                      line_width_min_pixels=1, stroked=True, pickable=True, opacity=0.85)
+    # Nền tối/sáng, điểm có màu theo European AQI.
+    map_style = "dark" if style == "Nền tối" else "light"
+    deck = pdk.Deck(layers=[layer],
+                    initial_view_state=pdk.ViewState(latitude=CITY_LAT, longitude=CITY_LON,
+                                                     zoom=10.1, pitch=35),
+                    map_style=map_style,
+                    tooltip={"html": "<b>{site}</b><br/>AQI: {AQI}<br/>PM2.5: {PM2.5} µg/m³<br/>PM10: {PM10} µg/m³<br/>{when}<br/><i>Dự báo mô hình</i>",
+                             "style": {"backgroundColor": "#10252d", "color": "#e9fcff"}})
+    st.pydeck_chart(deck, use_container_width=True, height=540)
+    st.caption("● Xanh: 0–20 · Xanh nhạt: 21–40 · Vàng: 41–60 · Cam: 61–80 · Đỏ: 81–100 · Tím: >100 (European AQI). Màu dựa trên AQI ngay cả khi xem PM2.5/PM10.")
+    m1, m2, m3 = st.columns(3)
+    m1.metric(f"{metric} thấp nhất", f"{frame[metric].min():.1f}")
+    m2.metric(f"{metric} trung bình", f"{frame[metric].mean():.1f}")
+    m3.metric(f"{metric} cao nhất", f"{frame[metric].max():.1f}")
+    with st.expander("◉ So sánh 25 điểm dự báo", expanded=False):
+        table = frame[["site", "latitude", "longitude", "AQI", "PM2.5", "PM10"]].sort_values(metric)
+        st.dataframe(table, hide_index=True, use_container_width=True)
+        st.download_button("Tải CSV các điểm dự báo", table.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"airvision_{SELECTED_CITY}_{ts:%Y%m%d_%H%M}.csv", mime="text/csv")
+    if not stations.empty and {"latitude", "longitude", "station"}.issubset(stations.columns) and "AQI" in stations:
+        st.caption("Dữ liệu trạm thực tế có thể được kết nối qua AQ_STATIONS_API; bản đồ lưới phía trên hiện chỉ thể hiện dự báo mô hình.")
+    st.caption("Các điểm lấy mẫu trên lưới đều, không phản ánh ranh giới hành chính. Độ phân giải nguồn mô hình có thể khiến nhiều điểm lân cận trùng giá trị; đây không phải bản đồ đo đạc chi tiết từng phường.")
 
 def forecast_task(df):
     st.markdown('<div class="sec">03 / Dự báo chất lượng không khí</div>', unsafe_allow_html=True)
