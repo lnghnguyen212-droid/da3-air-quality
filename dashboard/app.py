@@ -392,19 +392,21 @@ import streamlit as st
 
 
 API_LATEST = os.getenv(
-    "AQ_API_LATEST", "https://beijing-observation-simulator.onrender.com/api/v1/live/latest"
+    "AQ_API_LATEST", ""
 )
 MODEL_PATH = os.getenv("AQ_MODEL_PATH", "models/air_quality_rf_ensemble.pkl")
 REFRESH_SECONDS = 30
 
-st.set_page_config(page_title="AirVision AI | See the Invisible", page_icon="🍃", layout="wide")
+st.set_page_config(page_title="AirVision AI | Đà Nẵng", page_icon="🍃", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------- dữ liệu
 @st.cache_resource(ttl=20, show_spinner=False)
 def fetch_live():
-    """Gọi API quan trắc. Dịch vụ free trên Render có thể 'ngủ' nên cho timeout dài."""
+    """Đọc chất lượng không khí hiện tại từ Open-Meteo tại Đà Nẵng; không giả là trạm quan trắc."""
+    if not API_LATEST:
+        return _danang_live()
     try:
         res = requests.get(API_LATEST, timeout=25)
         res.raise_for_status()
@@ -617,6 +619,50 @@ FORECAST_API = os.getenv("AQ_FORECAST_API", "").strip()
 STATIONS_API = os.getenv("AQ_STATIONS_API", "").strip()
 
 
+
+# Dữ liệu mô hình dự báo chất lượng không khí Open-Meteo cho tọa độ trung tâm Đà Nẵng.
+# AQI sử dụng thang European AQI của nhà cung cấp, không phải HJ 633-2012.
+DANANG_LAT = 16.0544
+DANANG_LON = 108.2022
+AIR_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _danang_air_data():
+    params = {
+        "latitude": DANANG_LAT, "longitude": DANANG_LON,
+        "current": "pm2_5,pm10,nitrogen_dioxide,sulphur_dioxide,ozone,carbon_monoxide,european_aqi",
+        "hourly": "pm2_5,pm10,european_aqi",
+        "timezone": "Asia/Ho_Chi_Minh", "forecast_days": 7,
+    }
+    response = requests.get(AIR_URL, params=params, timeout=25)
+    response.raise_for_status()
+    return response.json()
+
+def _danang_live():
+    try:
+        payload = _danang_air_data()
+        current = payload.get("current", {})
+        names = {"pm2_5":"PM2.5", "pm10":"PM10", "nitrogen_dioxide":"NO2", "sulphur_dioxide":"SO2", "ozone":"O3", "carbon_monoxide":"CO"}
+        vals = {out:float(current[key]) for key,out in names.items() if current.get(key) is not None}
+        # Không đưa European AQI vào công thức AQI HJ của mã gốc.
+        live = Live(values=vals, station="Đà Nẵng · điểm tham chiếu mô hình", time=current.get("time"), ok="PM2.5" in vals)
+        if not live.ok: live.message="Nguồn Open-Meteo chưa có PM2.5 tại Đà Nẵng."
+        return live
+    except Exception as exc:
+        return Live(message=f"Không lấy được dữ liệu Đà Nẵng từ Open-Meteo ({type(exc).__name__}).")
+
+def _danang_forecast():
+    try:
+        hourly = _danang_air_data().get("hourly", {})
+        frame = pd.DataFrame({"timestamp":hourly.get("time", []),"AQI":hourly.get("european_aqi", []),"PM2.5":hourly.get("pm2_5", []),"PM10":hourly.get("pm10", [])})
+        return _canonical_table(frame), "Open-Meteo · dự báo mô hình · European AQI"
+    except Exception as exc:
+        return pd.DataFrame(), f"Open-Meteo chưa phản hồi ({type(exc).__name__})"
+
+def _danang_location():
+    # Đây là vị trí tham chiếu, không được trình bày là trạm đo.
+    return pd.DataFrame([{"station":"Đà Nẵng · điểm tham chiếu", "latitude":DANANG_LAT,"longitude":DANANG_LON}])
+
 def _fetch_optional_json(url):
     if not url:
         return None
@@ -673,6 +719,10 @@ def _canonical_table(raw, station=False):
 
 def _load_table(kind):
     """Tự đọc endpoint được cấu hình; không yêu cầu người dùng upload."""
+    if kind == "forecast" and not FORECAST_API:
+        return _danang_forecast()
+    if kind == "stations" and not STATIONS_API:
+        return _danang_location(), "Điểm tham chiếu Đà Nẵng (không phải trạm)"
     api = FORECAST_API if kind == "forecast" else STATIONS_API
     if not api:
         return pd.DataFrame(), "Chưa cấu hình API"
@@ -777,14 +827,15 @@ def overview_task(live, forecast):
 
 def map_task(stations):
     st.markdown('<div class="sec">02 / Bản đồ trạm quan trắc</div>', unsafe_allow_html=True)
-    st.caption("Chọn trạm và chỉ số để xem sự khác biệt giữa các điểm quan trắc. Không suy diễn vị trí hoặc AQI từ một trạm duy nhất.")
+    st.caption("Vị trí tham chiếu mô hình tại Đà Nẵng. Không phải trạm đo thực tế; chỉ hiển thị số đo trạm khi có API trạm riêng.")
     required = {"station", "latitude", "longitude"}
     if stations.empty or not required.issubset(stations.columns):
         st.info("Chưa có danh sách trạm kèm tọa độ. Cần API nhiều trạm hoặc cấu hình AQ_STATION_LAT / AQ_STATION_LON cho trạm hiện tại.")
         return
     options = [c for c in ("AQI", "PM2.5") if c in stations]
     if not options:
-        st.warning("Thiếu cột AQI hoặc PM2.5.")
+        st.map(stations.rename(columns={"latitude":"lat", "longitude":"lon"})[["lat","lon"]], zoom=10, use_container_width=True)
+        st.info("Đang hiển thị vị trí tham chiếu Đà Nẵng. Chưa có dữ liệu đo từ các trạm thực tế.")
         return
     metric = st.radio("Chỉ số bản đồ", options, horizontal=True, key="map_metric")
     stations = stations.dropna(subset=["latitude", "longitude", metric]).sort_values(metric, ascending=False)
@@ -804,7 +855,7 @@ def map_task(stations):
 
 def forecast_task(df):
     st.markdown('<div class="sec">03 / Dự báo chất lượng không khí</div>', unsafe_allow_html=True)
-    st.caption("Phân biệt dữ liệu dự báo theo thời gian với dự đoán PM2.5 cho một bộ đầu vào.")
+    st.caption("Dự báo theo giờ tại Đà Nẵng từ mô hình Open-Meteo (European AQI), không phải đầu ra của Random Forest Bắc Kinh.")
     if _forecast_valid(df):
         hourly = _hourly(df)
         if not hourly.empty:
@@ -827,7 +878,7 @@ def forecast_task(df):
             days = future.set_index("timestamp")["AQI"].resample("1D").mean().dropna() if not future.empty else pd.Series(dtype=float)
             if not days.empty:
                 st.markdown('<div class="sec">7 ngày tới · AQI trung bình ngày</div>', unsafe_allow_html=True)
-                st.dataframe(pd.DataFrame({"Ngày":days.index.strftime("%d/%m/%Y"),"AQI":days.round(1).values,"Mức độ":[category(x)["label"] for x in days]}),hide_index=True,use_container_width=True)
+                st.dataframe(pd.DataFrame({"Ngày":days.index.strftime("%d/%m/%Y"),"AQI":days.round(1).values,"Mức độ":["European AQI" for x in days]}),hide_index=True,use_container_width=True)
             else:
                 st.info("Chưa có dữ liệu dự báo 7 ngày.")
     else:
@@ -838,7 +889,7 @@ def forecast_task(df):
 
 def golden_task(df):
     st.markdown('<div class="sec">04 / Giờ vàng ngoài trời</div>', unsafe_allow_html=True)
-    st.caption("Lựa chọn hoạt động và thể trạng để tìm khoảng thời gian có AQI dự báo thấp nhất.")
+    st.caption("Giờ vàng tham khảo theo European AQI dự báo tại Đà Nẵng. Các ngưỡng dưới đây chỉ mang tính minh họa, không phải khuyến cáo sức khỏe được kiểm định.")
     a,b=st.columns([1,2],gap="large")
     with a:
         activity=st.radio("Hoạt động",["Đi dạo","Chạy bộ","Đạp xe","Yoga ngoài trời"],key="activity")
@@ -854,7 +905,7 @@ def golden_task(df):
             c1.metric("Số giờ phù hợp",int(suitable))
             c2.metric("Giờ nên tránh nhất",f"{worst['timestamp']:%H:%M} · {worst['AQI']:.0f}")
             st.dataframe(details.assign(timestamp=details["timestamp"].dt.strftime("%d/%m %H:%M")).rename(columns={"timestamp":"Thời gian","AQI":"AQI dự báo"}),hide_index=True,use_container_width=True)
-            st.caption("Ngưỡng gợi ý theo cường độ hoạt động, không phải tư vấn y tế cá nhân. Chỉ dùng khi dự báo đủ độ tin cậy.")
+            st.caption("Phân loại phù hợp chỉ là gợi ý thử nghiệm; European AQI không dùng cùng ngưỡng với AQI Trung Quốc. Không dùng làm tư vấn sức khỏe.")
             reminder=f"AirVision AI: {activity.lower()} từ {window[1]:%H:%M} đến {window[2]:%H:%M} ngày {window[1]:%d/%m/%Y}; AQI dự báo trung bình {window[0]:.0f}."
             st.download_button("↓ Lưu gợi ý giờ vàng (.txt)",reminder,file_name="airvision_gio_vang.txt",mime="text/plain")
         else:
@@ -875,11 +926,11 @@ if station_df.empty:
         station_source = "Trạm realtime hiện tại"
 
 with st.expander("◉ Trạng thái dữ liệu tự động", expanded=False):
-    st.caption(f"Quan trắc: {'Đã kết nối' if live0.ok else 'Chưa kết nối'} · Dự báo nhiều giờ: {forecast_source} · Bản đồ: {station_source}")
+    st.caption(f"Chất lượng không khí mô hình: {'Đã kết nối' if live0.ok else 'Chưa kết nối'} · Dự báo nhiều giờ: {forecast_source} · Bản đồ: {station_source}")
     now_pred, now_error = _live_model_now(live0)
     if now_pred is not None:
         st.metric("PM2.5 ước tính bằng Random Forest · điều kiện hiện tại", f"{now_pred.pm25:.1f} µg/m³")
-        st.caption("Đây là dự đoán tại thời điểm hiện tại, KHÔNG phải dự báo 24 giờ hay 7 ngày.")
+        st.caption("Mô hình huấn luyện trên Bắc Kinh, không được xác nhận độ chính xác cho Đà Nẵng. Đây không phải dự báo 24 giờ hay 7 ngày.")
     elif now_error:
         st.caption(f"Dự đoán tự động hiện tại chưa sẵn sàng: {now_error}")
     if not FORECAST_API:
