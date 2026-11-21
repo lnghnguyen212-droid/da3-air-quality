@@ -296,7 +296,7 @@ def gauge_svg(aqi: float | None, size: int = 240) -> str:
 </svg>"""
 
 
-def kpi_html(label: str, value: str, unit: str, hint: str = "", accent: str = "#38bdf8") -> str:
+def kpi_html(label: str, value: str, unit: str, hint: str = "", accent: str = "#13a8c4") -> str:
     return f"""
 <div class="kpi" style="--accent:{accent}">
   <div class="kpi-l">{label}</div>
@@ -325,51 +325,47 @@ def pollutant_bars_html(values: dict) -> str:
 
 CSS = """
 <style>
-:root{--bg:#0b1220;--card:#111a2e;--line:rgba(148,163,184,.14);--txt:#e6edf7;--mut:#8696b0;--acc:#34d399}
-.stApp{background:radial-gradient(1200px 600px at 10% -10%,#10223d 0%,var(--bg) 55%);color:var(--txt)}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
+:root{--bg:#f4f8fc;--card:#ffffff;--line:#e2eaf3;--txt:#18324d;--mut:#72869b;--acc:#087f91}
+.stApp{background:linear-gradient(135deg,#edfaff 0%,#f7f9ff 45%,#f3fff8 100%);color:var(--txt)}
 #MainMenu,footer,header[data-testid="stHeader"]{visibility:hidden;height:0}
-.block-container{max-width:1080px;padding-top:2rem;padding-bottom:3rem}
-h1,h2,h3,p,label,span,div{font-family:Inter,"Segoe UI",system-ui,sans-serif}
-.brand{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.4rem}
-.brand h1{font-size:1.45rem;font-weight:700;margin:0;letter-spacing:-.01em;color:var(--txt)}
+.block-container{max-width:1320px;padding-top:1.6rem;padding-bottom:4rem}
+html,body,h1,h2,h3,p,label,span,div,button{font-family:'DM Sans','Segoe UI',sans-serif}
+.brand{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:1.2rem;padding:18px 24px;background:#fff;border:1px solid var(--line);border-radius:20px;box-shadow:0 8px 30px #18324d0a}
+.brand h1{font-size:1.6rem;font-weight:800;margin:0;color:var(--txt);letter-spacing:-.035em}
 .brand h1 b{color:var(--acc)}
-.brand small{display:block;color:var(--mut);font-size:.82rem;font-weight:400;margin-top:2px}
-.live{display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--mut);
- background:var(--card);border:1px solid var(--line);padding:6px 12px;border-radius:999px}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:p 2s infinite}
-.dot.off{background:#f59e0b;animation:none}
-@keyframes p{70%{box-shadow:0 0 0 8px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 22px}
-.card h3{font-size:.78rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:0 0 14px}
-.hero{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
-.g-val{font-size:44px;font-weight:700;fill:var(--txt)}.g-lbl{font-size:12px;fill:var(--mut);letter-spacing:.14em}
-.pill{display:inline-block;padding:4px 12px;border-radius:999px;font-weight:600;font-size:.85rem;color:#0b1220}
-.advice{color:var(--mut);font-size:.92rem;line-height:1.5;max-width:300px;margin-top:10px}
-.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-.kpi{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:14px;padding:14px 16px}
-.kpi-l{color:var(--mut);font-size:.78rem;letter-spacing:.04em}
-.kpi-v{font-size:1.75rem;font-weight:700;margin-top:2px;color:var(--txt)}
-.kpi-u{font-size:.85rem;font-weight:500;color:var(--mut);margin-left:4px}
-.kpi-h{color:var(--mut);font-size:.75rem;margin-top:2px;min-height:1em}
-.pb{display:grid;grid-template-columns:56px 1fr 110px;align-items:center;gap:12px;margin:10px 0;font-size:.9rem}
-.pb-n{color:var(--txt);font-weight:600}.pb-v{text-align:right;color:var(--txt)}.pb-v i{color:var(--mut);font-style:normal;font-size:.75rem}
-.pb-t{height:8px;border-radius:99px;background:rgba(148,163,184,.14);overflow:hidden}
-.pb-f{height:100%;border-radius:99px}
-.muted{color:var(--mut);font-size:.9rem}
-.result{display:flex;gap:28px;flex-wrap:wrap;align-items:center}
-.r-big{font-size:3rem;font-weight:700;line-height:1}.r-big span{font-size:1rem;color:var(--mut);font-weight:500;margin-left:6px}
-.r-sub{color:var(--mut);font-size:.88rem;margin-top:6px}
-.range{margin-top:14px;max-width:420px}
-.rg-t{position:relative;height:8px;border-radius:99px;background:rgba(148,163,184,.14)}
-.rg-b{position:absolute;top:0;height:100%;border-radius:99px;opacity:.9}
-.rg-m{position:absolute;top:-4px;width:3px;height:16px;border-radius:2px;background:#fff}
-.rg-l{display:flex;justify-content:space-between;color:var(--mut);font-size:.75rem;margin-top:6px}
-.note{color:var(--mut);font-size:.78rem;margin-top:14px;line-height:1.5}
-div[data-testid="stForm"]{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 22px}
-.stButton>button,div[data-testid="stFormSubmitButton"]>button{border-radius:12px;font-weight:600;border:1px solid var(--line)}
-div[data-testid="stFormSubmitButton"]>button{background:var(--acc);color:#06281c;border:none;width:100%;padding:.6rem}
-.sec{font-size:1.05rem;font-weight:600;margin:1.8rem 0 .8rem;color:var(--txt)}
-@media(max-width:700px){.pb{grid-template-columns:50px 1fr 90px}}
+.brand small{display:block;color:var(--mut);font-size:.83rem;font-weight:500;margin-top:4px}
+.live{display:flex;align-items:center;gap:8px;font-size:.8rem;color:#257084;background:#e8f8f7;border:1px solid #c9eae5;padding:9px 14px;border-radius:999px;white-space:nowrap}
+.dot{width:9px;height:9px;border-radius:50%;background:#12b981;box-shadow:0 0 0 4px #12b98122}.dot.off{background:#f59e0b;box-shadow:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 8px 26px #18324d08}
+.card h3{font-size:.8rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#67819b;margin:0 0 16px}
+.hero{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.g-val{font-size:44px;font-weight:800;fill:var(--txt)}.g-lbl{font-size:12px;fill:var(--mut);letter-spacing:.14em}
+.pill{display:inline-block;padding:7px 14px;border-radius:999px;font-weight:800;font-size:.82rem;color:#fff}
+.advice{color:var(--mut);font-size:.9rem;line-height:1.6;max-width:320px;margin-top:12px}
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.kpi{background:#fff;border:1px solid var(--line);border-top:3px solid var(--accent);border-radius:18px;padding:20px;box-shadow:0 7px 20px #18324d07}
+.kpi-l{color:var(--mut);font-size:.84rem;font-weight:600}.kpi-v{font-size:2rem;font-weight:800;margin-top:7px;color:var(--txt)}
+.kpi-u{font-size:.8rem;font-weight:500;color:var(--mut);margin-left:5px}.kpi-h{color:var(--mut);font-size:.74rem;margin-top:4px;min-height:1em}
+.pb{display:grid;grid-template-columns:65px 1fr 130px;align-items:center;gap:14px;margin:14px 0;font-size:.9rem}
+.pb-n{color:var(--txt);font-weight:700}.pb-v{text-align:right;color:var(--txt);font-weight:600}.pb-v i{color:var(--mut);font-style:normal;font-size:.72rem}
+.pb-t{height:10px;border-radius:99px;background:#ecf1f6;overflow:hidden}.pb-f{height:100%;border-radius:99px}
+.muted{color:var(--mut);font-size:.9rem}.result{display:flex;gap:32px;flex-wrap:wrap;align-items:center}
+.r-big{font-size:3.2rem;font-weight:800;line-height:1;color:var(--txt)}.r-big span{font-size:1rem;color:var(--mut);font-weight:500;margin-left:6px}
+.r-sub{color:var(--mut);font-size:.9rem;margin-top:10px}.range{margin-top:20px;max-width:520px}
+.rg-t{position:relative;height:9px;border-radius:99px;background:#edf1f6}.rg-b{position:absolute;top:0;height:100%;border-radius:99px;opacity:.9}
+.rg-m{position:absolute;top:-4px;width:3px;height:17px;border-radius:2px;background:#203c56}.rg-l{display:flex;justify-content:space-between;color:var(--mut);font-size:.75rem;margin-top:8px}
+.note{color:var(--mut);font-size:.79rem;margin-top:15px;line-height:1.6}
+div[data-testid="stForm"]{background:#fff;border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 8px 26px #18324d08}
+.stButton>button,div[data-testid="stFormSubmitButton"]>button{border-radius:12px;font-weight:700;border:1px solid #d7e4ee;min-height:44px}
+div[data-testid="stFormSubmitButton"]>button[kind="primary"],.stButton>button[kind="primary"]{background:linear-gradient(110deg,#087f91,#14ad9a);color:#fff;border:none}
+.sec{font-size:1.22rem;font-weight:800;margin:2rem 0 1rem;color:var(--txt)}
+.hero-banner{background:linear-gradient(110deg,#0c7e95,#13b69e);color:white;border-radius:22px;padding:27px 32px;margin:10px 0 22px;box-shadow:0 12px 28px #087f9126}
+.hero-banner .eyebrow{font-size:.76rem;letter-spacing:.15em;font-weight:800;opacity:.85}
+.hero-banner h2{font-size:1.65rem;color:white;font-weight:800;margin:8px 0}.hero-banner p{margin:0;color:#e2fff7;font-size:.92rem}
+.lab-intro{background:linear-gradient(115deg,#fff,#edfaf9);border:1px solid #ccece8;border-radius:18px;padding:20px 24px;margin:6px 0 16px}
+.lab-intro h3{margin:0 0 7px;color:#086d7b}.lab-intro p{margin:0;color:#607c8d;font-size:.9rem}
+@media(max-width:720px){.brand{flex-direction:column;align-items:flex-start}.pb{grid-template-columns:50px 1fr 105px}.hero-banner{padding:22px}.block-container{padding-left:1rem;padding-right:1rem}}
 </style>
 """
 
@@ -405,7 +401,7 @@ API_LATEST = os.getenv(
 MODEL_PATH = os.getenv("AQ_MODEL_PATH", "models/air_quality_rf_ensemble.pkl")
 REFRESH_SECONDS = 30
 
-st.set_page_config(page_title="Beijing Air Quality Forecast", page_icon="🍃", layout="centered")
+st.set_page_config(page_title="Beijing Air Quality Forecast", page_icon="🍃", layout="wide")
 st.markdown(CSS, unsafe_allow_html=True)
 
 
@@ -438,8 +434,8 @@ def header(live: Live):
     text = f"Trực tuyến · {when}" if live.ok else "Chưa có dữ liệu trạm"
     st.markdown(
         f"""<div class="brand">
-  <div><h1>🍃 Beijing <b>Air Quality</b></h1>
-  <small>Quan trắc realtime và dự báo PM2.5 bằng Random Forest &amp; Ensemble Learning</small></div>
+  <div><h1>✦ AirVision <b>AI</b></h1>
+  <small>BEIJING AIR INTELLIGENCE · Random Forest &amp; Ensemble Learning</small></div>
   <div class="live"><span class="dot{state}"></span>{text}</div></div>""",
         unsafe_allow_html=True,
     )
@@ -467,9 +463,9 @@ def live_section():
         )
     with right:
         tiles = [
-            kpi_html("PM2.5", f"{v['PM2.5']:.0f}", "µg/m³", "Bụi mịn", "#38bdf8"),
-            kpi_html("Nhiệt độ", f"{v['TEMP']:.1f}" if "TEMP" in v else "—", "°C", "", "#fb923c"),
-            kpi_html("Độ ẩm", f"{v['HUMIDITY']:.0f}" if "HUMIDITY" in v else "—", "%", "Suy ra từ nhiệt độ &amp; điểm sương" if "DEWP" in v else "", "#60a5fa"),
+            kpi_html("PM2.5", f"{v['PM2.5']:.0f}", "µg/m³", "Bụi mịn", "#13a8c4"),
+            kpi_html("Nhiệt độ", f"{v['TEMP']:.1f}" if "TEMP" in v else "—", "°C", "", "#f59e63"),
+            kpi_html("Độ ẩm", f"{v['HUMIDITY']:.0f}" if "HUMIDITY" in v else "—", "%", "Suy ra từ nhiệt độ &amp; điểm sương" if "DEWP" in v else "", "#4c9fea"),
             kpi_html("Gió", f"{v['WSPM']:.1f}" if "WSPM" in v else "—", "m/s", "", "#a78bfa"),
         ]
         st.markdown(f'<div class="kpis">{"".join(tiles)}</div>', unsafe_allow_html=True)
@@ -511,9 +507,9 @@ def predict_section(live: Live):
         st.session_state.setdefault(f"in_{key}", float(live.get(key, default)))
 
     with st.form("predict_form", border=False):
-        cols = st.columns(5)
+        cols = st.columns(2)
         for i, (key, label, _, step, fmt) in enumerate(FIELDS):
-            with cols[i % 5]:
+            with cols[i % 2]:
                 st.number_input(label, step=step, format=fmt, key=f"in_{key}")
         c1, c2 = st.columns([1, 2.2])
         with c1:
@@ -523,6 +519,8 @@ def predict_section(live: Live):
             submitted = st.form_submit_button("Dự báo PM2.5", type="primary", use_container_width=True)
 
     if not submitted:
+        if "latest_prediction" in st.session_state:
+            show_prediction(st.session_state["latest_prediction"], live)
         return
 
     model = load_model()
@@ -540,6 +538,11 @@ def predict_section(live: Live):
         st.error(f"Không thể dự báo: {exc}")
         return
 
+    st.session_state["latest_prediction"] = pred
+    show_prediction(pred, live)
+
+
+def show_prediction(pred: Prediction, live: Live):
     cat = category(pred.aqi)
     st.markdown(
         f"""<div class="card"><h3>Kết quả dự báo</h3>
@@ -566,9 +569,54 @@ def _note(pred: Prediction, live: Live) -> str:
     return " ".join(parts)
 
 
+# ---------------------------------------------------------------- AI Scenario Lab
+
+def scenario_lab(live: Live):
+    st.markdown('<div class="sec">🧪 AI Scenario Lab · Dấu ấn riêng</div>', unsafe_allow_html=True)
+    st.markdown("""<div class="lab-intro"><h3>Nếu điều kiện môi trường thay đổi thì sao?</h3>
+    <p>Điều chỉnh các yếu tố và chạy mô hình thực tế để so sánh hai kịch bản. Đây là phân tích giả định (what-if), không phải dự báo theo giờ hay chứng minh quan hệ nhân quả.</p></div>""", unsafe_allow_html=True)
+    model = load_model()
+    if model is None:
+        st.info("Cần có file mô hình đã huấn luyện để sử dụng phòng thí nghiệm kịch bản.")
+        return
+    base = {k: float(st.session_state.get(f"in_{k}", live.get(k, default))) for k, _, default, _, _ in FIELDS}
+    with st.expander("Tùy chỉnh kịch bản môi trường", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            wind = st.slider("Thay đổi tốc độ gió (%)", -80, 100, 20, 5, key="lab_wind")
+            temp = st.slider("Thay đổi nhiệt độ (°C)", -10.0, 10.0, 0.0, 0.5, key="lab_temp")
+        with c2:
+            traffic = st.slider("Thay đổi NO₂ (%)", -80, 100, -20, 5, key="lab_no2")
+            dust = st.slider("Thay đổi PM10 (%)", -80, 100, -15, 5, key="lab_pm10")
+        run = st.button("✦ Phân tích & so sánh kịch bản", type="primary", use_container_width=True)
+    if not run:
+        return
+    alternative = base.copy()
+    alternative["WSPM"] = max(0, base["WSPM"] * (1 + wind / 100))
+    alternative["TEMP"] = base["TEMP"] + temp
+    alternative["NO2"] = max(0, base["NO2"] * (1 + traffic / 100))
+    alternative["PM10"] = max(0, base["PM10"] * (1 + dust / 100))
+    try:
+        before = predict_pm25(model, base, extras=live.values)
+        after = predict_pm25(model, alternative, extras=live.values)
+    except Exception as exc:
+        st.error(f"Không thể chạy kịch bản: {exc}")
+        return
+    a, b, c = st.columns(3)
+    a.metric("Kịch bản gốc · PM2.5", f"{before.pm25:.1f} µg/m³")
+    b.metric("Kịch bản điều chỉnh", f"{after.pm25:.1f} µg/m³", f"{after.pm25 - before.pm25:+.1f} µg/m³", delta_color="inverse")
+    c.metric("AQI ước tính sau thay đổi", f"{after.aqi:.0f}", category(after.aqi)["label"])
+    comparison = pd.DataFrame({"Kịch bản": ["Hiện tại (đầu vào)", "Giả lập"], "PM2.5 (µg/m³)": [before.pm25, after.pm25]})
+    st.bar_chart(comparison.set_index("Kịch bản"), color="#13a8a3")
+    st.caption("Kết quả là đầu ra của mô hình với bộ đặc trưng đã thay đổi, không phải phép đo thực tế. Chỉ số AQI ở đây được suy ra riêng từ PM2.5; thay đổi nhiều biến đồng thời không xác lập tác động nhân quả.")
+    if before.missing or after.missing:
+        st.warning("Một số đặc trưng mô hình bị thiếu và được điền 0: " + ", ".join(sorted(set(before.missing + after.missing))))
+
+
 # ---------------------------------------------------------------- chạy
 live0 = fetch_live()
 header(live0)
+st.markdown("""<div class="hero-banner"><div class="eyebrow">ENVIRONMENTAL INTELLIGENCE PLATFORM</div><h2>Hiểu không khí hôm nay. Khám phá kịch bản ngày mai.</h2><p>Quan trắc trực tuyến · Dự báo bằng học máy · Thử nghiệm các điều kiện môi trường với AI Scenario Lab</p></div>""", unsafe_allow_html=True)
 
 if hasattr(st, "fragment"):
     st.fragment(run_every=REFRESH_SECONDS)(live_section)()
