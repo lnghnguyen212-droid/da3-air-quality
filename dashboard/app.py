@@ -609,13 +609,255 @@ def scenario_lab(live: Live):
         st.warning("Một số đặc trưng mô hình bị thiếu và được điền 0: " + ", ".join(sorted(set(before.missing + after.missing))))
 
 
-# ---------------------------------------------------------------- chạy
+# ---------------------------------------------------------------- tác vụ theo tài liệu tham khảo
+from datetime import timedelta
+
+# Tùy chọn: API dự báo phải trả về dữ liệu có timestamp và các giá trị dự báo.
+FORECAST_API = os.getenv("AQ_FORECAST_API", "").strip()
+STATIONS_API = os.getenv("AQ_STATIONS_API", "").strip()
+
+
+def _fetch_optional_json(url):
+    if not url:
+        return None
+    try:
+        response = requests.get(url, timeout=18)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        st.warning(f"Không thể đọc nguồn dữ liệu bổ sung: {type(exc).__name__}")
+        return None
+
+
+def _records(payload):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("data", "results", "records", "forecasts", "stations", "items"):
+            if isinstance(payload.get(key), list):
+                return payload[key]
+    return []
+
+
+def _canonical_table(raw, station=False):
+    if raw is None or len(raw) == 0:
+        return pd.DataFrame()
+    df = raw.copy()
+    aliases = {
+        "timestamp": ["timestamp", "datetime", "time", "date", "forecast_time", "observed_at"],
+        "station": ["station", "station_name", "name", "site"],
+        "latitude": ["latitude", "lat"], "longitude": ["longitude", "lon", "lng", "long"],
+        "AQI": ["aqi"], "PM2.5": ["pm2.5", "pm25", "pm2_5"],
+        "PM10": ["pm10"], "WSPM": ["wspm", "wind_speed"],
+    }
+    columns = {_norm(c): c for c in df.columns}
+    rename = {}
+    for target, options in aliases.items():
+        for option in options:
+            if _norm(option) in columns:
+                rename[columns[_norm(option)]] = target
+                break
+    df = df.rename(columns=rename)
+    for key in ("AQI", "PM2.5", "PM10", "latitude", "longitude", "WSPM"):
+        if key in df:
+            df[key] = pd.to_numeric(df[key], errors="coerce")
+    if "timestamp" in df:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        df = df.dropna(subset=["timestamp"])
+    if "AQI" not in df and "PM2.5" in df:
+        df["AQI"] = df["PM2.5"].apply(lambda x: aqi_from_pm25(x) if pd.notna(x) else float("nan"))
+    if station and "station" not in df:
+        return pd.DataFrame()
+    return df
+
+
+def _load_table(kind):
+    if kind == "forecast":
+        api = FORECAST_API
+        label = "Dữ liệu dự báo (CSV)"
+        help_text = "Cần cột timestamp và ít nhất một trong AQI, PM2.5, PM10. Dữ liệu phải là kết quả dự báo theo thời gian từ hệ thống của bạn."
+    else:
+        api = STATIONS_API
+        label = "Dữ liệu các trạm (CSV)"
+        help_text = "Cần cột station, latitude, longitude và AQI hoặc PM2.5."
+    uploaded = st.file_uploader(label, type=["csv"], key=f"upload_{kind}", help=help_text)
+    if uploaded is not None:
+        try:
+            return _canonical_table(pd.read_csv(uploaded), station=kind == "stations"), "CSV tải lên"
+        except Exception as exc:
+            st.error(f"CSV không hợp lệ: {exc}")
+            return pd.DataFrame(), None
+    payload = _fetch_optional_json(api)
+    if payload is not None:
+        return _canonical_table(pd.DataFrame(_records(payload)), station=kind == "stations"), "API được cấu hình"
+    return pd.DataFrame(), None
+
+
+def _forecast_valid(df):
+    return not df.empty and "timestamp" in df and any(c in df for c in ("AQI", "PM2.5", "PM10"))
+
+
+def _hourly(df, hours=24):
+    if not _forecast_valid(df):
+        return pd.DataFrame()
+    now = pd.Timestamp.now()
+    subset = df[(df["timestamp"] >= now.floor("h")) & (df["timestamp"] < now + pd.Timedelta(hours=hours))].copy()
+    if subset.empty:
+        return subset
+    numeric = [c for c in ("AQI", "PM2.5", "PM10") if c in subset]
+    subset = subset.set_index("timestamp")[numeric].resample("1h").mean().dropna(how="all").reset_index()
+    return subset
+
+
+def _chart(df, key, title):
+    if key not in df or df[key].dropna().empty:
+        st.info(f"Nguồn dữ liệu chưa có {key}.")
+        return
+    st.markdown(f'<div class="sec">{title}</div>', unsafe_allow_html=True)
+    st.line_chart(df.set_index("timestamp")[[key]], color="#62efd5", height=300)
+
+
+def _golden_window(df, activity, sensitive):
+    """Chọn khung liên tiếp 2 giờ AQI thấp nhất; ngưỡng mang tính gợi ý."""
+    if df.empty or "AQI" not in df:
+        return None, pd.DataFrame()
+    data = df[["timestamp", "AQI"]].dropna().sort_values("timestamp").copy()
+    thresholds = {"Đi dạo": 100, "Chạy bộ": 50, "Đạp xe": 75, "Yoga ngoài trời": 100}
+    threshold = min(thresholds[activity], 50) if sensitive else thresholds[activity]
+    data["Mức độ"] = data["AQI"].apply(lambda a: "Phù hợp" if a <= threshold else ("Cân nhắc" if a <= threshold + 50 else "Nên tránh"))
+    candidates = []
+    for i in range(len(data)-1):
+        a, b = data.iloc[i], data.iloc[i+1]
+        if b["timestamp"] - a["timestamp"] == pd.Timedelta(hours=1):
+            candidates.append((float((a["AQI"]+b["AQI"])/2), a["timestamp"], b["timestamp"]+pd.Timedelta(hours=1)))
+    return min(candidates, key=lambda t:t[0]) if candidates else None, data
+
+
+def overview_task(live, forecast):
+    st.markdown('<div class="sec">01 / Tổng quan chất lượng không khí</div>', unsafe_allow_html=True)
+    live_section()
+    if _forecast_valid(forecast):
+        hourly = _hourly(forecast)
+        if not hourly.empty:
+            key = "AQI" if "AQI" in hourly else "PM2.5"
+            _chart(hourly, key, "24 giờ tới · dữ liệu dự báo")
+            window, _ = _golden_window(hourly, "Đi dạo", False)
+            if window:
+                st.success(f"✦ Giờ không khí tốt nhất (2 giờ liên tiếp): {window[1]:%H:%M} – {window[2]:%H:%M}, AQI trung bình {window[0]:.0f}.")
+    else:
+        st.info("Biểu đồ 24 giờ và giờ vàng sẽ xuất hiện khi bạn cung cấp dữ liệu dự báo theo giờ ở mục Dự báo.")
+
+
+def map_task(stations):
+    st.markdown('<div class="sec">02 / Bản đồ trạm quan trắc</div>', unsafe_allow_html=True)
+    st.caption("Chọn trạm và chỉ số để xem sự khác biệt giữa các điểm quan trắc. Không suy diễn vị trí hoặc AQI từ một trạm duy nhất.")
+    required = {"station", "latitude", "longitude"}
+    if stations.empty or not required.issubset(stations.columns):
+        st.info("Chưa có danh sách trạm kèm tọa độ. Hãy tải CSV trạm ở phần nguồn dữ liệu.")
+        return
+    options = [c for c in ("AQI", "PM2.5") if c in stations]
+    if not options:
+        st.warning("Thiếu cột AQI hoặc PM2.5.")
+        return
+    metric = st.radio("Chỉ số bản đồ", options, horizontal=True, key="map_metric")
+    stations = stations.dropna(subset=["latitude", "longitude", metric]).sort_values(metric, ascending=False)
+    if stations.empty:
+        st.warning("Không có trạm hợp lệ để hiển thị.")
+        return
+    left, right = st.columns([1, 2.2], gap="large")
+    with left:
+        selected = st.selectbox("Trạm quan trắc", stations["station"].astype(str).tolist(), key="selected_station")
+        st.dataframe(stations[["station", metric]].rename(columns={"station":"Trạm"}), hide_index=True, use_container_width=True)
+        station_row = stations[stations["station"].astype(str) == selected].iloc[0]
+        st.metric(f"{metric} · {selected}", f"{station_row[metric]:.1f}")
+    with right:
+        st.map(stations.rename(columns={"latitude":"lat", "longitude":"lon"})[["lat", "lon"]], zoom=10, use_container_width=True)
+    st.caption("Điểm trên bản đồ lấy từ tọa độ trong nguồn dữ liệu; bản đồ không tự tạo số đo cho các khu vực chưa có trạm.")
+
+
+def forecast_task(df):
+    st.markdown('<div class="sec">03 / Dự báo chất lượng không khí</div>', unsafe_allow_html=True)
+    st.caption("Phân biệt dữ liệu dự báo theo thời gian với dự đoán PM2.5 cho một bộ đầu vào.")
+    if _forecast_valid(df):
+        hourly = _hourly(df)
+        if not hourly.empty:
+            options = [c for c in ("AQI", "PM2.5", "PM10") if c in hourly]
+            metric = st.radio("Chỉ số", options, horizontal=True, key="forecast_metric")
+            _chart(hourly, metric, "24 giờ tới")
+            valid = hourly.dropna(subset=[metric])
+            if not valid.empty:
+                high = valid.loc[valid[metric].idxmax()]
+                low = valid.loc[valid[metric].idxmin()]
+                c1,c2,c3=st.columns(3)
+                c1.metric("Cao nhất", f"{high[metric]:.1f}", f"{high['timestamp']:%H:%M}")
+                c2.metric("Thấp nhất", f"{low[metric]:.1f}", f"{low['timestamp']:%H:%M}")
+                c3.metric("Biến động đầu–cuối", f"{valid[metric].iloc[-1]-valid[metric].iloc[0]:+.1f}")
+        else:
+            st.info("Chưa có bản ghi dự báo nào trong 24 giờ tới.")
+        if "AQI" in df:
+            future = df[df["timestamp"] >= pd.Timestamp.now().floor("D")].copy()
+            future = future[future["timestamp"] < pd.Timestamp.now().floor("D")+pd.Timedelta(days=7)]
+            days = future.set_index("timestamp")["AQI"].resample("1D").mean().dropna() if not future.empty else pd.Series(dtype=float)
+            if not days.empty:
+                st.markdown('<div class="sec">7 ngày tới · AQI trung bình ngày</div>', unsafe_allow_html=True)
+                st.dataframe(pd.DataFrame({"Ngày":days.index.strftime("%d/%m/%Y"),"AQI":days.round(1).values,"Mức độ":[category(x)["label"] for x in days]}),hide_index=True,use_container_width=True)
+            else:
+                st.info("Chưa có dữ liệu dự báo 7 ngày.")
+    else:
+        st.info("Cần API hoặc CSV dự báo theo giờ để hiển thị 24 giờ và 7 ngày. Mô hình RF hiện tại dự đoán một thời điểm, không tự sinh chuỗi thời gian.")
+    with st.expander("Dự đoán PM2.5 bằng Random Forest · nhập điều kiện môi trường", expanded=False):
+        predict_section(live0)
+
+
+def golden_task(df):
+    st.markdown('<div class="sec">04 / Giờ vàng ngoài trời</div>', unsafe_allow_html=True)
+    st.caption("Lựa chọn hoạt động và thể trạng để tìm khoảng thời gian có AQI dự báo thấp nhất.")
+    a,b=st.columns([1,2],gap="large")
+    with a:
+        activity=st.radio("Hoạt động",["Đi dạo","Chạy bộ","Đạp xe","Yoga ngoài trời"],key="activity")
+        sensitive=st.radio("Thể trạng",["Bình thường","Nhóm nhạy cảm"],key="sensitivity")=="Nhóm nhạy cảm"
+    with b:
+        hourly=_hourly(df)
+        window, details=_golden_window(hourly,activity,sensitive)
+        if window:
+            st.markdown(f'<div class="lab-intro"><h3>✦ KHUNG GIỜ KHÔNG KHÍ TỐT NHẤT</h3><h2>{window[1]:%H:%M} – {window[2]:%H:%M}</h2><p>AQI trung bình khoảng {window[0]:.0f} · theo dữ liệu dự báo đã cung cấp.</p></div>',unsafe_allow_html=True)
+            suitable=(details["Mức độ"]=="Phù hợp").sum()
+            worst=details.loc[details["AQI"].idxmax()]
+            c1,c2=st.columns(2)
+            c1.metric("Số giờ phù hợp",int(suitable))
+            c2.metric("Giờ nên tránh nhất",f"{worst['timestamp']:%H:%M} · {worst['AQI']:.0f}")
+            st.dataframe(details.assign(timestamp=details["timestamp"].dt.strftime("%d/%m %H:%M")).rename(columns={"timestamp":"Thời gian","AQI":"AQI dự báo"}),hide_index=True,use_container_width=True)
+            st.caption("Ngưỡng gợi ý theo cường độ hoạt động, không phải tư vấn y tế cá nhân. Chỉ dùng khi dự báo đủ độ tin cậy.")
+            reminder=f"AirVision AI: {activity.lower()} từ {window[1]:%H:%M} đến {window[2]:%H:%M} ngày {window[1]:%d/%m/%Y}; AQI dự báo trung bình {window[0]:.0f}."
+            st.download_button("↓ Lưu gợi ý giờ vàng (.txt)",reminder,file_name="airvision_gio_vang.txt",mime="text/plain")
+        else:
+            st.info("Chưa đủ ít nhất 2 giờ dự báo liên tiếp có AQI để xác định giờ vàng. Vui lòng tải CSV dự báo ở phần nguồn dữ liệu.")
+
+
+# ---------------------------------------------------------------- chạy · giữ nguyên hero và hiệu ứng cũ
 live0 = fetch_live()
 header(live0)
 st.markdown("""<section class="immersive"><div class="immersive-copy"><div class="eyebrow">✦ AIRVISION AI / ENVIRONMENTAL INTELLIGENCE</div><h2>SEE THE<br><em>INVISIBLE.</em></h2><p>Khám phá những gì đang diễn ra trong bầu không khí. Quan trắc trực tuyến, dự báo PM2.5 bằng học máy và thử nghiệm tương lai qua AI Scenario Lab.</p><div class="hero-tags"><span>01 / LIVE MONITORING</span><span>02 / RANDOM FOREST</span><span>03 / SCENARIO LAB</span></div></div><div class="planet-wrap" aria-label="Quả cầu khí quyển chuyển động"><div class="orbit-two"></div><div class="planet"></div><div class="orbit-dot"></div><div class="planet-label">ATMOSPHERIC SYSTEM / 001</div></div></section><div class="ticker"><span>✦ AIR QUALITY INTELLIGENCE &nbsp;&nbsp;&nbsp; ◉ REAL-TIME ENVIRONMENT &nbsp;&nbsp;&nbsp; ✦ MACHINE LEARNING FORECAST &nbsp;&nbsp;&nbsp; ◉ EXPLORE THE INVISIBLE &nbsp;&nbsp;&nbsp; ✦ AIR QUALITY INTELLIGENCE &nbsp;&nbsp;&nbsp; ◉ REAL-TIME ENVIRONMENT &nbsp;&nbsp;&nbsp; ✦ MACHINE LEARNING FORECAST &nbsp;&nbsp;&nbsp; ◉ EXPLORE THE INVISIBLE &nbsp;&nbsp;&nbsp;</span></div>""", unsafe_allow_html=True)
 
-if hasattr(st, "fragment"):
-    st.fragment(run_every=REFRESH_SECONDS)(live_section)()
+with st.expander("⚙ Nguồn dữ liệu dự báo và các trạm", expanded=False):
+    st.caption("Có thể kết nối API bằng AQ_FORECAST_API và AQ_STATIONS_API trên Render, hoặc tải file CSV để dùng thử tác vụ. Không dùng dữ liệu mẫu làm dữ liệu thực.")
+    colf, cols = st.columns(2)
+    with colf:
+        forecast_df, forecast_source = _load_table("forecast")
+    with cols:
+        station_df, station_source = _load_table("stations")
+    st.caption(f"Nguồn dự báo: {forecast_source or 'chưa kết nối'} · Nguồn trạm: {station_source or 'chưa kết nối'}")
+
+nav = st.radio("Điều hướng", ["Tổng quan", "Bản đồ", "Dự báo", "Giờ vàng", "AI Scenario Lab"], horizontal=True, label_visibility="collapsed", key="airvision_nav")
+if nav == "Tổng quan":
+    overview_task(live0, forecast_df)
+elif nav == "Bản đồ":
+    map_task(station_df)
+elif nav == "Dự báo":
+    forecast_task(forecast_df)
+elif nav == "Giờ vàng":
+    golden_task(forecast_df)
 else:
-    live_section()
-predict_section(live0)
+    for key, _, default, _, _ in FIELDS:
+        st.session_state.setdefault(f"in_{key}", float(live0.get(key, default)))
+    scenario_lab(live0)
