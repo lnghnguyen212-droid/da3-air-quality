@@ -672,25 +672,52 @@ def _canonical_table(raw, station=False):
 
 
 def _load_table(kind):
-    if kind == "forecast":
-        api = FORECAST_API
-        label = "Dữ liệu dự báo (CSV)"
-        help_text = "Cần cột timestamp và ít nhất một trong AQI, PM2.5, PM10. Dữ liệu phải là kết quả dự báo theo thời gian từ hệ thống của bạn."
-    else:
-        api = STATIONS_API
-        label = "Dữ liệu các trạm (CSV)"
-        help_text = "Cần cột station, latitude, longitude và AQI hoặc PM2.5."
-    uploaded = st.file_uploader(label, type=["csv"], key=f"upload_{kind}", help=help_text)
-    if uploaded is not None:
-        try:
-            return _canonical_table(pd.read_csv(uploaded), station=kind == "stations"), "CSV tải lên"
-        except Exception as exc:
-            st.error(f"CSV không hợp lệ: {exc}")
-            return pd.DataFrame(), None
+    """Tự đọc endpoint được cấu hình; không yêu cầu người dùng upload."""
+    api = FORECAST_API if kind == "forecast" else STATIONS_API
+    if not api:
+        return pd.DataFrame(), "Chưa cấu hình API"
     payload = _fetch_optional_json(api)
-    if payload is not None:
-        return _canonical_table(pd.DataFrame(_records(payload)), station=kind == "stations"), "API được cấu hình"
-    return pd.DataFrame(), None
+    if payload is None:
+        return pd.DataFrame(), "API chưa phản hồi"
+    records = _records(payload)
+    if not records:
+        return pd.DataFrame(), "API không có danh sách bản ghi"
+    table = _canonical_table(pd.DataFrame(records), station=kind == "stations")
+    return table, "API tự động" if not table.empty else "API thiếu trường dữ liệu"
+
+
+def _single_live_station(live):
+    """Chỉ hiển thị trạm hiện tại nếu tọa độ được cấu hình thật."""
+    try:
+        lat = float(os.environ["AQ_STATION_LAT"])
+        lon = float(os.environ["AQ_STATION_LON"])
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return pd.DataFrame()
+    except (KeyError, ValueError):
+        return pd.DataFrame()
+    if not live.ok:
+        return pd.DataFrame()
+    record = {"station": live.station or "Trạm quan trắc hiện tại", "latitude": lat, "longitude": lon}
+    record.update({k: live.values[k] for k in ("AQI", "PM2.5", "PM10") if k in live.values})
+    return pd.DataFrame([record])
+
+
+def _live_model_now(live):
+    """Dự đoán PM2.5 cho đúng thời điểm hiện tại; KHÔNG gắn nhãn dự báo 24h."""
+    if not live.ok:
+        return None, "API quan trắc chưa có dữ liệu"
+    try:
+        model = load_model()
+        if model is None:
+            return None, f"Không tìm thấy mô hình {MODEL_PATH}"
+        model_obj, stored = unpack_model(model)
+        feats = model_features(model_obj, stored)
+        missing = [f for f in feats if live.get(f) is None]
+        if missing:
+            return None, "Trạm thiếu đầu vào mô hình: " + ", ".join(missing)
+        return predict_pm25(model, {f: float(live.get(f)) for f in feats}), None
+    except Exception as exc:
+        return None, f"Mô hình chưa thể chạy: {type(exc).__name__}: {exc}"
 
 
 def _forecast_valid(df):
@@ -745,7 +772,7 @@ def overview_task(live, forecast):
             if window:
                 st.success(f"✦ Giờ không khí tốt nhất (2 giờ liên tiếp): {window[1]:%H:%M} – {window[2]:%H:%M}, AQI trung bình {window[0]:.0f}.")
     else:
-        st.info("Biểu đồ 24 giờ và giờ vàng sẽ xuất hiện khi bạn cung cấp dữ liệu dự báo theo giờ ở mục Dự báo.")
+        st.info("Biểu đồ 24 giờ và giờ vàng sẽ xuất hiện khi hệ thống kết nối được API dự báo theo giờ.")
 
 
 def map_task(stations):
@@ -753,7 +780,7 @@ def map_task(stations):
     st.caption("Chọn trạm và chỉ số để xem sự khác biệt giữa các điểm quan trắc. Không suy diễn vị trí hoặc AQI từ một trạm duy nhất.")
     required = {"station", "latitude", "longitude"}
     if stations.empty or not required.issubset(stations.columns):
-        st.info("Chưa có danh sách trạm kèm tọa độ. Hãy tải CSV trạm ở phần nguồn dữ liệu.")
+        st.info("Chưa có danh sách trạm kèm tọa độ. Cần API nhiều trạm hoặc cấu hình AQ_STATION_LAT / AQ_STATION_LON cho trạm hiện tại.")
         return
     options = [c for c in ("AQI", "PM2.5") if c in stations]
     if not options:
@@ -804,7 +831,7 @@ def forecast_task(df):
             else:
                 st.info("Chưa có dữ liệu dự báo 7 ngày.")
     else:
-        st.info("Cần API hoặc CSV dự báo theo giờ để hiển thị 24 giờ và 7 ngày. Mô hình RF hiện tại dự đoán một thời điểm, không tự sinh chuỗi thời gian.")
+        st.info("Chưa có API dự báo theo giờ. Mô hình RF hiện tại chỉ dự đoán một thời điểm; không tự tạo được chuỗi 24 giờ hoặc 7 ngày.")
     with st.expander("Dự đoán PM2.5 bằng Random Forest · nhập điều kiện môi trường", expanded=False):
         predict_section(live0)
 
@@ -831,7 +858,7 @@ def golden_task(df):
             reminder=f"AirVision AI: {activity.lower()} từ {window[1]:%H:%M} đến {window[2]:%H:%M} ngày {window[1]:%d/%m/%Y}; AQI dự báo trung bình {window[0]:.0f}."
             st.download_button("↓ Lưu gợi ý giờ vàng (.txt)",reminder,file_name="airvision_gio_vang.txt",mime="text/plain")
         else:
-            st.info("Chưa đủ ít nhất 2 giờ dự báo liên tiếp có AQI để xác định giờ vàng. Vui lòng tải CSV dự báo ở phần nguồn dữ liệu.")
+            st.info("Chưa đủ ít nhất 2 giờ dự báo liên tiếp có AQI để xác định giờ vàng. Cần kết nối API dự báo theo giờ.")
 
 
 # ---------------------------------------------------------------- chạy · giữ nguyên hero và hiệu ứng cũ
@@ -839,14 +866,26 @@ live0 = fetch_live()
 header(live0)
 st.markdown("""<section class="immersive"><div class="immersive-copy"><div class="eyebrow">✦ AIRVISION AI / ENVIRONMENTAL INTELLIGENCE</div><h2>SEE THE<br><em>INVISIBLE.</em></h2><p>Khám phá những gì đang diễn ra trong bầu không khí. Quan trắc trực tuyến, dự báo PM2.5 bằng học máy và thử nghiệm tương lai qua AI Scenario Lab.</p><div class="hero-tags"><span>01 / LIVE MONITORING</span><span>02 / RANDOM FOREST</span><span>03 / SCENARIO LAB</span></div></div><div class="planet-wrap" aria-label="Quả cầu khí quyển chuyển động"><div class="orbit-two"></div><div class="planet"></div><div class="orbit-dot"></div><div class="planet-label">ATMOSPHERIC SYSTEM / 001</div></div></section><div class="ticker"><span>✦ AIR QUALITY INTELLIGENCE &nbsp;&nbsp;&nbsp; ◉ REAL-TIME ENVIRONMENT &nbsp;&nbsp;&nbsp; ✦ MACHINE LEARNING FORECAST &nbsp;&nbsp;&nbsp; ◉ EXPLORE THE INVISIBLE &nbsp;&nbsp;&nbsp; ✦ AIR QUALITY INTELLIGENCE &nbsp;&nbsp;&nbsp; ◉ REAL-TIME ENVIRONMENT &nbsp;&nbsp;&nbsp; ✦ MACHINE LEARNING FORECAST &nbsp;&nbsp;&nbsp; ◉ EXPLORE THE INVISIBLE &nbsp;&nbsp;&nbsp;</span></div>""", unsafe_allow_html=True)
 
-with st.expander("⚙ Nguồn dữ liệu dự báo và các trạm", expanded=False):
-    st.caption("Có thể kết nối API bằng AQ_FORECAST_API và AQ_STATIONS_API trên Render, hoặc tải file CSV để dùng thử tác vụ. Không dùng dữ liệu mẫu làm dữ liệu thực.")
-    colf, cols = st.columns(2)
-    with colf:
-        forecast_df, forecast_source = _load_table("forecast")
-    with cols:
-        station_df, station_source = _load_table("stations")
-    st.caption(f"Nguồn dự báo: {forecast_source or 'chưa kết nối'} · Nguồn trạm: {station_source or 'chưa kết nối'}")
+# Tự động lấy dữ liệu khi tải trang, không cần upload CSV.
+forecast_df, forecast_source = _load_table("forecast")
+station_df, station_source = _load_table("stations")
+if station_df.empty:
+    station_df = _single_live_station(live0)
+    if not station_df.empty:
+        station_source = "Trạm realtime hiện tại"
+
+with st.expander("◉ Trạng thái dữ liệu tự động", expanded=False):
+    st.caption(f"Quan trắc: {'Đã kết nối' if live0.ok else 'Chưa kết nối'} · Dự báo nhiều giờ: {forecast_source} · Bản đồ: {station_source}")
+    now_pred, now_error = _live_model_now(live0)
+    if now_pred is not None:
+        st.metric("PM2.5 ước tính bằng Random Forest · điều kiện hiện tại", f"{now_pred.pm25:.1f} µg/m³")
+        st.caption("Đây là dự đoán tại thời điểm hiện tại, KHÔNG phải dự báo 24 giờ hay 7 ngày.")
+    elif now_error:
+        st.caption(f"Dự đoán tự động hiện tại chưa sẵn sàng: {now_error}")
+    if not FORECAST_API:
+        st.caption("Để có dự báo 24 giờ / 7 ngày và Giờ vàng, cấu hình AQ_FORECAST_API trỏ đến endpoint trả về các dự báo có timestamp.")
+    if station_df.empty:
+        st.caption("Để có bản đồ, cấu hình AQ_STATIONS_API cho nhiều trạm, hoặc AQ_STATION_LAT và AQ_STATION_LON cho trạm hiện tại.")
 
 nav = st.radio("Điều hướng", ["Tổng quan", "Bản đồ", "Dự báo", "Giờ vàng", "AI Scenario Lab"], horizontal=True, label_visibility="collapsed", key="airvision_nav")
 if nav == "Tổng quan":
