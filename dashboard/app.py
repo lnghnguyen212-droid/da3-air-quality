@@ -1089,7 +1089,7 @@ def map_task(stations):
     map_col, detail_col = st.columns([2.05, 1], gap="medium")
     with map_col:
         m = folium.Map(location=[16.2, 106.4], zoom_start=6,
-                       tiles="CartoDB dark_matter", control_scale=True,
+                       tiles="OpenStreetMap", control_scale=True,
                        prefer_canvas=True)
         for _, r in snapshot.dropna(subset=["AQI", "PM2.5", "PM10"]).iterrows():
             # All warning colors use European AQI, even if the user selects PM2.5/PM10.
