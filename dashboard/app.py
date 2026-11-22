@@ -995,151 +995,172 @@ def _map_grid(city_name):
     return frame.dropna(subset=["timestamp"])
 
 
-
-# Lưới toàn Việt Nam: nhiều tỉnh thành cùng có màu khi thu nhỏ bản đồ.
-# Lưu ý: đây là lớp dự báo mô hình theo lưới thưa, không phải dữ liệu quan trắc.
-@st.cache_data(ttl=3600, show_spinner=False)
-def _vietnam_grid():
-    # 15 x 9 = 135 vị trí, API gọi theo lô nhỏ và được cache một giờ.
-    lats = np.linspace(8.3, 23.0, 15)
-    lons = np.linspace(102.2, 109.9, 9)
-    coords = [(round(float(y), 4), round(float(x), 4))
-              for y in lats for x in lons]
-    records = []
-    for k in range(0, len(coords), 30):
-        batch = coords[k:k+30]
-        params = {
-            "latitude": ",".join(str(y) for y, _ in batch),
-            "longitude": ",".join(str(x) for _, x in batch),
-            "hourly": "european_aqi,pm2_5,pm10",
-            "timezone": "Asia/Ho_Chi_Minh", "forecast_days": 2,
-        }
-        response = requests.get(AIR_URL, params=params, timeout=35)
-        response.raise_for_status()
-        payload = response.json()
-        if isinstance(payload, dict):
-            payload = [payload]
-        if len(payload) != len(batch):
-            raise ValueError("API không trả đủ vị trí dự báo toàn quốc")
-        for (lat, lon), site in zip(batch, payload):
-            hourly = site.get("hourly", {})
-            times = hourly.get("time", [])
-            for idx, ts in enumerate(times):
-                record = {"latitude":lat, "longitude":lon, "timestamp":ts}
-                for metric, field in MAP_METRICS.items():
-                    values = hourly.get(field) or []
-                    record[metric] = values[idx] if idx < len(values) else np.nan
-                records.append(record)
-    df = pd.DataFrame(records)
-    if not df.empty:
-        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        for metric in MAP_METRICS:
-            df[metric] = pd.to_numeric(df[metric], errors="coerce")
-    return df
+@st.cache_data(ttl=1800, show_spinner=False)
+def _city_explorer_forecasts():
+    """One batched Open-Meteo request for each configured city, cached 30 minutes."""
+    cities = list(VN_CITIES.items())
+    params = {
+        "latitude": ",".join(str(pos[0]) for _, pos in cities),
+        "longitude": ",".join(str(pos[1]) for _, pos in cities),
+        "hourly": "european_aqi,pm2_5,pm10",
+        "timezone": "Asia/Ho_Chi_Minh", "forecast_days": 2,
+    }
+    response = requests.get(AIR_URL, params=params, timeout=40)
+    response.raise_for_status()
+    payload = response.json()
+    if isinstance(payload, dict): payload = [payload]
+    if len(payload) != len(cities):
+        raise ValueError("Nguồn dự báo trả về không đủ thành phố")
+    rows = []
+    for (city, (lat, lon)), site in zip(cities, payload):
+        hourly = site.get("hourly") or {}
+        times = hourly.get("time") or []
+        for i, time in enumerate(times):
+            record = {"Thành phố": city, "latitude": lat, "longitude": lon,
+                      "timestamp": time}
+            for name, field in MAP_METRICS.items():
+                values = hourly.get(field) or []
+                record[name] = values[i] if i < len(values) else None
+            rows.append(record)
+    df = pd.DataFrame(rows)
+    if df.empty: return df
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    for name in MAP_METRICS:
+        df[name] = pd.to_numeric(df[name], errors="coerce")
+    return df.dropna(subset=["timestamp"])
 
 
-def _overlay_png(frame, metric, width=450, height=850):
-    """Màu liên tục từ dữ liệu lưới, viền ngoài fade mềm, không tạo ô vuông riêng lẻ."""
-    from PIL import ImageFilter
-    lats = np.sort(frame.latitude.unique())
-    lons = np.sort(frame.longitude.unique())
-    lookup = {(float(r.latitude), float(r.longitude)):float(r[metric])
-              for _,r in frame.iterrows() if pd.notna(r[metric])}
-    if len(lookup) < len(lats)*len(lons):
-        return None
-    matrix = np.array([[lookup[(float(y),float(x))] for x in lons] for y in lats])
-    if metric != "AQI":
-        # Màu nồng độ mang tính tương đối, không gọi là thang cảnh báo AQI.
-        low, high = np.percentile(matrix, [5,95])
-        matrix = np.full_like(matrix, 35.) if high <= low else (
-            20+75*np.clip((matrix-low)/(high-low),0,1))
-    # Từ Nam lên Bắc -> ảnh cần Bắc ở hàng đầu tiên.
-    raw = np.flipud(matrix).astype("float32")
-    field = np.asarray(Image.fromarray(raw,mode="F").resize(
-        (width,height),Image.Resampling.BICUBIC))
-    rgb = np.clip(_aqi_to_rgb(field),0,255).astype("uint8")
-    # Làm mềm mép phủ; bản đồ vẫn hiển thị những vùng có dữ liệu xung quanh.
-    yy,xx = np.mgrid[0:height,0:width]
-    edge = np.minimum.reduce([xx/(width*.10), (width-1-xx)/(width*.10),
-                              yy/(height*.06), (height-1-yy)/(height*.06)])
-    alpha = (np.clip(edge,0,1)*145).astype("uint8")
-    rgba = np.dstack([rgb,alpha])
-    img = Image.fromarray(rgba,"RGBA").filter(ImageFilter.GaussianBlur(2))
-    out=io.BytesIO()
-    img.save(out,format="PNG",optimize=True)
-    return out.getvalue()
+def _eu_aqi_level(value):
+    """European AQI, using Open-Meteo's European index (not US or Chinese AQI)."""
+    if pd.isna(value): return "Chưa có dữ liệu", "#748598"
+    if value <= 20: return "Tốt", "#33caa2"
+    if value <= 40: return "Khá", "#86d16b"
+    if value <= 60: return "Trung bình", "#f0c75a"
+    if value <= 80: return "Kém", "#f49c56"
+    if value <= 100: return "Rất kém", "#ed6674"
+    return "Cực kỳ kém", "#a777cf"
 
 
 def map_task(stations):
+    """AirVision City Explorer: grounded city points + synchronized city insights."""
     import folium
     import streamlit.components.v1 as components
+    from html import escape
 
-    st.markdown('<div class="sec">02 / AIRVISION ATMOSPHERIC MAP</div>',
+    st.markdown('<div class="sec">02 / AIRVISION CITY EXPLORER</div>',
                 unsafe_allow_html=True)
-    st.caption("Bản đồ dự báo nhiều tỉnh thành · Open-Meteo · dữ liệu mô hình, không phải trạm đo")
-    c1,c2=st.columns([1,2])
-    with c1:
-        metric=st.selectbox("Lớp dữ liệu",list(MAP_METRICS),key="map_layer")
-    with c2:
-        hour=st.select_slider("Thời gian",options=[0,3,6,12,24],
-                              format_func=lambda x:"Hiện tại" if x==0 else f"+{x} giờ",
-                              key="map_forecast_hour")
-
+    st.caption("Bản đồ các thành phố Việt Nam · Open-Meteo European AQI · dự báo tại tọa độ đại diện")
     try:
-        with st.spinner("Đang tải lớp dự báo trên toàn Việt Nam (lần đầu có thể lâu hơn)..."):
-            national=_vietnam_grid()
+        data = _city_explorer_forecasts()
     except Exception as exc:
-        st.error(f"Không tải được dữ liệu toàn quốc: {type(exc).__name__}. "
-                 "Thử lại sau hoặc kiểm tra giới hạn API Open-Meteo.")
+        st.error("Không thể tải dữ liệu các thành phố từ Open-Meteo. "
+                 f"Chi tiết: {type(exc).__name__}: {exc}")
         return
-    if national.empty:
-        st.warning("Nguồn dự báo chưa trả về dữ liệu.")
-        return
-
-    now=pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").tz_localize(None)
-    times=sorted(national.timestamp.dropna().unique())
-    future=[pd.Timestamp(t) for t in times if pd.Timestamp(t)>=now.floor("h")]
-    if not future:
-        future=[pd.Timestamp(t) for t in times]
-    ts=future[min(hour,len(future)-1)]
-    frame=national[national.timestamp==ts].dropna(subset=[metric])
-    png=_overlay_png(frame,metric)
-    if png is None:
-        st.warning("Lưới dự báo toàn quốc không đủ dữ liệu để tạo lớp màu.")
+    if data.empty:
+        st.info("Chưa có dữ liệu dự báo để hiển thị.")
         return
 
-    # Khởi tạo quanh tỉnh/thành đã chọn; zoom ra vẫn thấy lớp màu toàn quốc.
-    m=folium.Map(location=[CITY_LAT,CITY_LON],zoom_start=8,
-                 tiles="CartoDB dark_matter",control_scale=True,
-                 prefer_canvas=True)
-    folium.raster_layers.ImageOverlay(
-        image="data:image/png;base64,"+base64.b64encode(png).decode("ascii"),
-        bounds=[[8.3,102.2],[23.0,109.9]],opacity=.9,
-        interactive=False,name="Dự báo Việt Nam",zindex=2).add_to(m)
+    now = pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").tz_localize(None)
+    times = sorted(data["timestamp"].unique())
+    future = [pd.Timestamp(t) for t in times if pd.Timestamp(t) >= now.floor("h")]
+    if not future: future = [pd.Timestamp(t) for t in times]
+    offsets = [h for h in (0, 3, 6, 12, 24) if h < len(future)]
+    if not offsets:
+        st.warning("Nguồn dữ liệu không có mốc dự báo phù hợp.")
+        return
 
-    # Đánh dấu tỉnh được chọn rất nhỏ, không che mất lớp màu.
-    folium.CircleMarker(
-        [CITY_LAT,CITY_LON],radius=4,color="#ffffff",weight=1,
-        fill=True,fill_color="#21ddc5",fill_opacity=1,
-        tooltip=f"Địa phương đang chọn: {SELECTED_CITY}").add_to(m)
+    ctrl1, ctrl2, ctrl3 = st.columns([1.2, 1.4, 1.8], gap="medium")
+    with ctrl1:
+        metric = st.selectbox("Lớp dữ liệu", list(MAP_METRICS), key="city_explorer_metric")
+    with ctrl2:
+        offset = st.select_slider("Mốc dự báo", options=offsets,
+                                  format_func=lambda h: "Hiện tại" if h == 0 else f"+{h} giờ",
+                                  key="city_explorer_offset")
+    with ctrl3:
+        city = st.selectbox("Phân tích thành phố", list(VN_CITIES),
+                            index=list(VN_CITIES).index(SELECTED_CITY),
+                            key="city_explorer_city")
+    ts = future[offset]
+    snapshot = data[data["timestamp"] == ts].copy()
+    if snapshot.empty:
+        st.warning("Không có dữ liệu ở mốc thời gian này.")
+        return
 
-    components.html(m.get_root().render(),height=590,scrolling=False)
-    if metric=="AQI":
-        st.markdown("""<div style="height:7px;border-radius:12px;
-        background:linear-gradient(90deg,#4a80c4,#78b2d6,#eee278,#f5aa3c,#e25050,#aa286e,#64143c)"></div>
-        <div style="display:flex;justify-content:space-between;color:#9ab7c4;font-size:12px;margin-top:7px">
-        <span>0 · Tốt</span><span>40 · Trung bình</span><span>80 · Kém</span>
-        <span>100 · Rất kém</span><span>150+ · Cực kỳ kém</span></div>""",
-        unsafe_allow_html=True)
+    map_col, detail_col = st.columns([2.05, 1], gap="medium")
+    with map_col:
+        m = folium.Map(location=[16.2, 106.4], zoom_start=6,
+                       tiles="CartoDB dark_matter", control_scale=True,
+                       prefer_canvas=True)
+        for _, r in snapshot.dropna(subset=["AQI", "PM2.5", "PM10"]).iterrows():
+            # All warning colors use European AQI, even if the user selects PM2.5/PM10.
+            status, color = _eu_aqi_level(r["AQI"])
+            selected = r["Thành phố"] == city
+            number = "–" if pd.isna(r[metric]) else f"{r[metric]:.0f}"
+            label = escape(str(r["Thành phố"]))
+            popup = (f"<div style='font:13px Arial;min-width:170px;color:#12222d'>"
+                     f"<b>{label}</b><br>European AQI: {r['AQI']:.0f} ({status})<br>"
+                     f"PM2.5: {r['PM2.5']:.1f} µg/m³<br>"
+                     f"PM10: {r['PM10']:.1f} µg/m³<br>"
+                     f"{ts:%d/%m/%Y %H:%M}</div>")
+            folium.CircleMarker(
+                [r["latitude"], r["longitude"]], radius=10 if selected else 7,
+                color="#ffffff" if selected else color, weight=2 if selected else 1,
+                fill=True, fill_color=color, fill_opacity=.92,
+                tooltip=f"{r['Thành phố']} · {metric}: {number}",
+                popup=folium.Popup(popup, max_width=260),
+            ).add_to(m)
+        components.html(m.get_root().render(), height=525, scrolling=False)
+        st.caption("Màu điểm thể hiện mức European AQI. Nhấn vào điểm để xem dữ liệu; "
+                   "dùng bộ chọn thành phố phía trên để đổi bảng phân tích.")
+
+    with detail_col:
+        st.markdown(f"### {city}")
+        selected_rows = snapshot[snapshot["Thành phố"] == city]
+        if selected_rows.empty:
+            st.info("Chưa có dữ liệu tại thành phố này.")
+        else:
+            current = selected_rows.iloc[0]
+            status, color = _eu_aqi_level(current["AQI"])
+            aqi_text = "–" if pd.isna(current["AQI"]) else f"{current['AQI']:.0f}"
+            st.markdown(f"<div style='border-left:4px solid {color};padding:8px 13px;"
+                        f"background:rgba(255,255,255,.035);border-radius:7px'>"
+                        f"<span style='color:#9db3c0'>EUROPEAN AQI</span><br>"
+                        f"<span style='font-size:34px;font-weight:700;color:{color}'>{aqi_text}</span>"
+                        f"<span style='margin-left:12px;color:{color}'>{status}</span></div>",
+                        unsafe_allow_html=True)
+            x, y = st.columns(2)
+            x.metric("PM2.5 (µg/m³)", "–" if pd.isna(current["PM2.5"]) else f"{current['PM2.5']:.1f}")
+            y.metric("PM10 (µg/m³)", "–" if pd.isna(current["PM10"]) else f"{current['PM10']:.1f}")
+            st.caption(f"Dự báo cho {ts:%d/%m/%Y %H:%M} (giờ Việt Nam)")
+            st.markdown("**Xu hướng AQI 24 giờ tiếp theo**")
+            trend = data[(data["Thành phố"] == city) &
+                         (data["timestamp"] >= ts) &
+                         (data["timestamp"] <= ts + pd.Timedelta(hours=24))]
+            trend = trend.dropna(subset=["AQI"]).sort_values("timestamp")
+            if len(trend) >= 2:
+                st.line_chart(trend.set_index("timestamp")[["AQI"]], height=185)
+            else:
+                st.info("Chưa đủ dữ liệu để vẽ biểu đồ.")
+
+    st.markdown("#### Xếp hạng chất lượng không khí giữa các thành phố")
+    ranking = snapshot.dropna(subset=["AQI"]).sort_values("AQI").copy()
+    if ranking.empty:
+        st.info("Không có dữ liệu AQI để xếp hạng.")
     else:
-        st.caption(f"Thang màu {metric} chỉ thể hiện mức nồng độ tương đối trên toàn vùng.")
-    st.caption("Zoom xa để xem nhiều tỉnh. Vùng màu là nội suy từ 135 tọa độ dự báo "
-               "trên lãnh thổ và khu vực lân cận Việt Nam; không chính xác đến cấp đường phố. "
-               "Hiện hỗ trợ Việt Nam, chưa tự tải dữ liệu ngoài phạm vi này.")
-    a,b,c=st.columns(3)
-    a.metric(f"{metric} thấp nhất",f"{frame[metric].min():.1f}")
-    b.metric(f"{metric} trung bình",f"{frame[metric].mean():.1f}")
-    c.metric(f"{metric} cao nhất",f"{frame[metric].max():.1f}")
+        ranking["Mức độ"] = ranking["AQI"].apply(lambda v: _eu_aqi_level(v)[0])
+        ranking["AQI"] = ranking["AQI"].round(0)
+        for name in ("PM2.5", "PM10"):
+            ranking[name] = ranking[name].round(1)
+        ranking.insert(0, "Hạng", range(1, len(ranking)+1))
+        st.dataframe(ranking[["Hạng", "Thành phố", "AQI", "Mức độ", "PM2.5", "PM10"]],
+                     hide_index=True, use_container_width=True)
+        st.download_button("Tải bảng so sánh CSV",
+                           ranking[["Hạng", "Thành phố", "AQI", "Mức độ", "PM2.5", "PM10"]]
+                           .to_csv(index=False).encode("utf-8-sig"),
+                           file_name="airvision_city_ranking.csv", mime="text/csv")
+    st.caption("Dữ liệu do mô hình Open-Meteo dự báo tại tâm các thành phố đã cấu hình. "
+               "Không phải quan trắc trực tiếp, không đại diện toàn bộ địa giới tỉnh/thành "
+               "và không phải dự báo từ mô hình Random Forest của dự án.")
 
 def forecast_task(df):
     st.markdown('<div class="sec">03 / Dự báo chất lượng không khí</div>', unsafe_allow_html=True)
