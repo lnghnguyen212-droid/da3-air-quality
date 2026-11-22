@@ -1124,15 +1124,8 @@ def map_task(stations):
         text=texts, texttemplate="%{text}", textfont={"size":10,"color":"#ffffff"},
         xgap=3, ygap=4,
         hovertemplate="%{y}<br>%{x} · "+metric+": %{z:.1f}<extra></extra>",
-        colorbar={
-    "title": {
-        "text": metric,
-        "font": {"color": "#b7d4dd"}
-    },
-    "tickfont": {"color": "#b7d4dd"},
-    "thickness": 10,
-    "len": 0.75
-}))
+        colorbar={"tickfont":{"color":"#b7d4dd"},
+                  "title":{"text":metric,"font":{"color":"#b7d4dd"}},"thickness":10,"len":.75}))
     fig.add_shape(type="rect", xref="x", yref="paper",
                   x0=time_idx-.5, x1=time_idx+.5, y0=0, y1=1,
                   line={"color":"#ffffff","width":2}, fillcolor="rgba(0,0,0,0)")
@@ -1202,36 +1195,69 @@ def map_task(stations):
                "Đây không phải kết quả dự báo của mô hình Random Forest trong dự án.")
 
 def forecast_task(df):
-    st.markdown('<div class="sec">03 / Dự báo chất lượng không khí</div>', unsafe_allow_html=True)
-    st.caption(f"Dự báo theo giờ tại {SELECTED_CITY} từ mô hình Open-Meteo (European AQI), không phải đầu ra của Random Forest Bắc Kinh.")
-    if _forecast_valid(df):
-        hourly = _hourly(df)
-        if not hourly.empty:
-            options = [c for c in ("AQI", "PM2.5", "PM10") if c in hourly]
-            metric = st.radio("Chỉ số", options, horizontal=True, key="forecast_metric")
-            _chart(hourly, metric, "24 giờ tới")
-            valid = hourly.dropna(subset=[metric])
-            if not valid.empty:
-                high = valid.loc[valid[metric].idxmax()]
-                low = valid.loc[valid[metric].idxmin()]
-                c1,c2,c3=st.columns(3)
-                c1.metric("Cao nhất", f"{high[metric]:.1f}", f"{high['timestamp']:%H:%M}")
-                c2.metric("Thấp nhất", f"{low[metric]:.1f}", f"{low['timestamp']:%H:%M}")
-                c3.metric("Biến động đầu–cuối", f"{valid[metric].iloc[-1]-valid[metric].iloc[0]:+.1f}")
-        else:
-            st.info("Chưa có bản ghi dự báo nào trong 24 giờ tới.")
-        if "AQI" in df:
-            future = df[df["timestamp"] >= pd.Timestamp.now().floor("D")].copy()
-            future = future[future["timestamp"] < pd.Timestamp.now().floor("D")+pd.Timedelta(days=7)]
-            days = future.set_index("timestamp")["AQI"].resample("1D").mean().dropna() if not future.empty else pd.Series(dtype=float)
-            if not days.empty:
-                st.markdown('<div class="sec">7 ngày tới · AQI trung bình ngày</div>', unsafe_allow_html=True)
-                st.dataframe(pd.DataFrame({"Ngày":days.index.strftime("%d/%m/%Y"),"AQI":days.round(1).values,"Mức độ":["European AQI" for x in days]}),hide_index=True,use_container_width=True)
-            else:
-                st.info("Chưa có dữ liệu dự báo 7 ngày.")
-    else:
-        st.info("Chưa có API dự báo theo giờ. Mô hình RF hiện tại chỉ dự đoán một thời điểm; không tự tạo được chuỗi 24 giờ hoặc 7 ngày.")
-    with st.expander("Dự đoán PM2.5 bằng Random Forest · nhập điều kiện môi trường", expanded=False):
+    """Forecast-first experience: show the actual forecast before comparison tools."""
+    import plotly.graph_objects as go
+    st.markdown('<div class="sec">01 / AIRVISION FORECAST CENTER</div>', unsafe_allow_html=True)
+    st.markdown("### Dự báo chất lượng không khí · 24 giờ tới")
+    st.caption("Nguồn: Open-Meteo · European AQI tại tọa độ thành phố. Không phải dự báo của mô hình Random Forest.")
+    try:
+        all_data = _city_explorer_forecasts()
+    except Exception as exc:
+        st.error(f"Không tải được dữ liệu dự báo: {type(exc).__name__}: {exc}")
+        return
+    if all_data.empty:
+        st.warning("Chưa có dữ liệu dự báo để hiển thị.")
+        return
+    cities = list(VN_CITIES)
+    c1,c2,c3 = st.columns([1.4,1,1])
+    with c1:
+        city = st.selectbox("Thành phố dự báo",cities,index=cities.index(SELECTED_CITY),key="main_forecast_city")
+    with c2:
+        metric = st.selectbox("Chỉ số dự báo",["AQI","PM2.5","PM10"],key="main_forecast_metric")
+    with c3:
+        horizon = st.selectbox("Khoảng thời gian",[24,48],format_func=lambda n:f"{n} giờ tới",key="main_forecast_horizon")
+    now=pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").tz_localize(None)
+    subset=all_data[(all_data["Thành phố"]==city) &
+                    (all_data["timestamp"]>=now.floor("h")) &
+                    (all_data["timestamp"]<now.floor("h")+pd.Timedelta(hours=horizon))]
+    subset=subset.dropna(subset=[metric]).sort_values("timestamp")
+    if subset.empty:
+        st.warning("Không có dữ liệu cho thành phố và khoảng thời gian này.")
+        return
+    current=subset.iloc[0]
+    peak=subset.loc[subset[metric].idxmax()]
+    trough=subset.loc[subset[metric].idxmin()]
+    label = "European AQI" if metric=="AQI" else metric+" (µg/m³)"
+    a,b,c,d=st.columns(4)
+    a.metric("Dự báo gần nhất · "+label,f"{current[metric]:.1f}")
+    b.metric("Cao nhất",f"{peak[metric]:.1f}",peak["timestamp"].strftime("%d/%m %H:%M"),delta_color="off")
+    c.metric("Thấp nhất",f"{trough[metric]:.1f}",trough["timestamp"].strftime("%d/%m %H:%M"),delta_color="off")
+    d.metric("Thay đổi cuối kỳ",f"{subset[metric].iloc[-1]-subset[metric].iloc[0]:+.1f}")
+    st.markdown("#### Diễn biến dự báo theo giờ")
+    fig=go.Figure()
+    fig.add_trace(go.Scatter(x=subset["timestamp"],y=subset[metric],mode="lines+markers",
+        line={"color":"#45e3ce","width":3},marker={"size":5,"color":"#7cf4e4"},
+        fill="tozeroy",fillcolor="rgba(69,227,206,.10)",
+        hovertemplate="%{x|%d/%m %H:%M}<br>"+label+": %{y:.1f}<extra></extra>"))
+    fig.update_layout(template="plotly_dark",height=440,
+        paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
+        margin={"l":12,"r":15,"t":20,"b":12},
+        font={"color":"#d9edf1"},
+        xaxis={"title":"Giờ Việt Nam","gridcolor":"rgba(255,255,255,.06)","tickformat":"%d/%m %H:%M"},
+        yaxis={"title":label,"gridcolor":"rgba(255,255,255,.09)"},
+        hovermode="x unified")
+    st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
+    if metric=="AQI":
+        status,color=_eu_aqi_level(current["AQI"])
+        st.markdown(f'<div style="padding:16px 20px;border-radius:14px;background:#112631;'
+                    f'border-left:4px solid {color};color:#e8f4f6">'
+                    f'<b>Đánh giá tại {city}:</b> <span style="color:{color}">{status}</span>'
+                    f' · European AQI {current["AQI"]:.0f}</div>',unsafe_allow_html=True)
+    st.caption("Đây là dự báo mô hình tại tọa độ đại diện, không phải quan trắc trực tiếp. "
+               "Không suy diễn mức ô nhiễm cho toàn bộ tỉnh/thành.")
+    with st.expander("So sánh dự báo nhiều thành phố · Forecast Matrix",expanded=False):
+        st.info("Mở tab Ma trận dự báo để xem bản đồ nhiệt 24 giờ và xếp hạng các thành phố.")
+    with st.expander("Random Forest · Dự đoán PM2.5 theo điều kiện nhập",expanded=False):
         predict_section(live0)
 
 
@@ -1286,10 +1312,11 @@ with st.expander("◉ Trạng thái dữ liệu tự động", expanded=False):
     if station_df.empty:
         st.caption("Để có bản đồ, cấu hình AQ_STATIONS_API cho nhiều trạm, hoặc AQ_STATION_LAT và AQ_STATION_LON cho trạm hiện tại.")
 
-nav = st.radio("Điều hướng", ["Tổng quan", "Bản đồ", "Dự báo", "Giờ vàng", "AI Scenario Lab"], horizontal=True, label_visibility="collapsed", key="airvision_nav")
+st.session_state.setdefault("airvision_nav", "Tổng quan")
+nav = st.radio("Điều hướng", ["Tổng quan", "Dự báo", "Ma trận dự báo", "Giờ vàng", "AI Scenario Lab"], horizontal=True, label_visibility="collapsed", key="airvision_nav")
 if nav == "Tổng quan":
     overview_task(live0, forecast_df)
-elif nav == "Bản đồ":
+elif nav == "Ma trận dự báo":
     map_task(station_df)
 elif nav == "Dự báo":
     forecast_task(forecast_df)
