@@ -1124,8 +1124,15 @@ def map_task(stations):
         text=texts, texttemplate="%{text}", textfont={"size":10,"color":"#ffffff"},
         xgap=3, ygap=4,
         hovertemplate="%{y}<br>%{x} · "+metric+": %{z:.1f}<extra></extra>",
-        colorbar={"title":metric,"tickfont":{"color":"#b7d4dd"},
-                  "titlefont":{"color":"#b7d4dd"},"thickness":10,"len":.75}))
+        colorbar={
+    "title": {
+        "text": metric,
+        "font": {"color": "#b7d4dd"}
+    },
+    "tickfont": {"color": "#b7d4dd"},
+    "thickness": 10,
+    "len": 0.75
+}))
     fig.add_shape(type="rect", xref="x", yref="paper",
                   x0=time_idx-.5, x1=time_idx+.5, y0=0, y1=1,
                   line={"color":"#ffffff","width":2}, fillcolor="rgba(0,0,0,0)")
