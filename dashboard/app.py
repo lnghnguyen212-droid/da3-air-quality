@@ -931,32 +931,32 @@ def _aqi_to_rgb(values):
     chans = [np.interp(values, xs, [s[1][c] for s in AQI_COLOR_STOPS]) for c in range(3)]
     return np.stack(chans, axis=-1)
 
-def _heat_cells(matrix, rows, cols, n=80, max_alpha=170):
-    """Nội suy bicubic ma trận AQI (hàng 0 = vĩ độ nhỏ nhất) thành lưới n×n ô nhỏ,
-    màu liên tục và mờ dần ở mép. Trả về list dict cho PolygonLayer
-    (không dùng data-URI vì pydeck hiểu nhầm chuỗi đó là biểu thức JS)."""
-    m = np.nan_to_num(matrix, nan=float(np.nanmean(matrix))).astype("float32")
-    arr = np.asarray(Image.fromarray(m, mode="F").resize((n, n), Image.BICUBIC), dtype="float32")
-    rgb = _aqi_to_rgb(arr)
-    t = (np.arange(n) + 0.5) / n
-    fade = np.clip(np.minimum(t, 1 - t) / 0.18, 0, 1)
-    fade = fade * fade * (3 - 2 * fade)          # smoothstep
-    alpha = np.outer(fade, fade) * max_alpha
-    lat_axis = np.linspace(float(rows[0]), float(rows[-1]), n + 1)
-    lon_axis = np.linspace(float(cols[0]), float(cols[-1]), n + 1)
-    cells = []
-    for i in range(n):
-        y0, y1 = float(lat_axis[i]), float(lat_axis[i + 1])
-        for j in range(n):
-            a = int(alpha[i, j])
-            if a < 4:
-                continue
-            x0, x1 = float(lon_axis[j]), float(lon_axis[j + 1])
-            cells.append({
-                "polygon": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
-                "color": [int(rgb[i, j, 0]), int(rgb[i, j, 1]), int(rgb[i, j, 2]), a],
-            })
-    return cells
+def _atmospheric_png(matrix, width=600, height=600):
+    """PNG RGBA mềm, alpha giảm dần theo khoảng cách; không có viền ô vuông.
+
+    Đây là phép nội suy minh họa từ lưới Open-Meteo, KHÔNG là bản đồ
+    quan trắc liên tục hoặc độ phân giải gốc của nhà cung cấp.
+    """
+    from PIL import ImageFilter
+    raw = np.asarray(matrix, dtype=float)
+    if not np.isfinite(raw).any():
+        return None
+    raw = np.where(np.isfinite(raw), raw, np.nanmean(raw))
+    # Hàng ảnh đầu tiên là vĩ độ phía bắc.
+    raw = np.flipud(raw).astype('float32')
+    field = np.asarray(Image.fromarray(raw, mode='F').resize((width, height), Image.Resampling.BICUBIC))
+    rgb = np.clip(_aqi_to_rgb(field), 0, 255).astype('uint8')
+    yy, xx = np.mgrid[-1:1:complex(height), -1:1:complex(width)]
+    radius = np.sqrt((xx / .96)**2 + (yy / .96)**2)
+    # Fade radial: vùng phủ không có bốn cạnh vuông nhìn thấy được.
+    fade = np.clip((1.0 - radius) / .43, 0, 1)
+    fade = fade * fade * (3 - 2 * fade)
+    # Lớp phủ dịu, giữ nguyên đường và địa danh của bản đồ nền.
+    rgba = np.dstack((rgb, (fade * 112).astype('uint8')))
+    img = Image.fromarray(rgba, 'RGBA').filter(ImageFilter.GaussianBlur(7))
+    output = io.BytesIO()
+    img.save(output, format='PNG', optimize=True)
+    return output.getvalue()
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -995,99 +995,151 @@ def _map_grid(city_name):
     return frame.dropna(subset=["timestamp"])
 
 
+
+# Lưới toàn Việt Nam: nhiều tỉnh thành cùng có màu khi thu nhỏ bản đồ.
+# Lưu ý: đây là lớp dự báo mô hình theo lưới thưa, không phải dữ liệu quan trắc.
+@st.cache_data(ttl=3600, show_spinner=False)
+def _vietnam_grid():
+    # 15 x 9 = 135 vị trí, API gọi theo lô nhỏ và được cache một giờ.
+    lats = np.linspace(8.3, 23.0, 15)
+    lons = np.linspace(102.2, 109.9, 9)
+    coords = [(round(float(y), 4), round(float(x), 4))
+              for y in lats for x in lons]
+    records = []
+    for k in range(0, len(coords), 30):
+        batch = coords[k:k+30]
+        params = {
+            "latitude": ",".join(str(y) for y, _ in batch),
+            "longitude": ",".join(str(x) for _, x in batch),
+            "hourly": "european_aqi,pm2_5,pm10",
+            "timezone": "Asia/Ho_Chi_Minh", "forecast_days": 2,
+        }
+        response = requests.get(AIR_URL, params=params, timeout=35)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload = [payload]
+        if len(payload) != len(batch):
+            raise ValueError("API không trả đủ vị trí dự báo toàn quốc")
+        for (lat, lon), site in zip(batch, payload):
+            hourly = site.get("hourly", {})
+            times = hourly.get("time", [])
+            for idx, ts in enumerate(times):
+                record = {"latitude":lat, "longitude":lon, "timestamp":ts}
+                for metric, field in MAP_METRICS.items():
+                    values = hourly.get(field) or []
+                    record[metric] = values[idx] if idx < len(values) else np.nan
+                records.append(record)
+    df = pd.DataFrame(records)
+    if not df.empty:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        for metric in MAP_METRICS:
+            df[metric] = pd.to_numeric(df[metric], errors="coerce")
+    return df
+
+
+def _overlay_png(frame, metric, width=450, height=850):
+    """Màu liên tục từ dữ liệu lưới, viền ngoài fade mềm, không tạo ô vuông riêng lẻ."""
+    from PIL import ImageFilter
+    lats = np.sort(frame.latitude.unique())
+    lons = np.sort(frame.longitude.unique())
+    lookup = {(float(r.latitude), float(r.longitude)):float(r[metric])
+              for _,r in frame.iterrows() if pd.notna(r[metric])}
+    if len(lookup) < len(lats)*len(lons):
+        return None
+    matrix = np.array([[lookup[(float(y),float(x))] for x in lons] for y in lats])
+    if metric != "AQI":
+        # Màu nồng độ mang tính tương đối, không gọi là thang cảnh báo AQI.
+        low, high = np.percentile(matrix, [5,95])
+        matrix = np.full_like(matrix, 35.) if high <= low else (
+            20+75*np.clip((matrix-low)/(high-low),0,1))
+    # Từ Nam lên Bắc -> ảnh cần Bắc ở hàng đầu tiên.
+    raw = np.flipud(matrix).astype("float32")
+    field = np.asarray(Image.fromarray(raw,mode="F").resize(
+        (width,height),Image.Resampling.BICUBIC))
+    rgb = np.clip(_aqi_to_rgb(field),0,255).astype("uint8")
+    # Làm mềm mép phủ; bản đồ vẫn hiển thị những vùng có dữ liệu xung quanh.
+    yy,xx = np.mgrid[0:height,0:width]
+    edge = np.minimum.reduce([xx/(width*.10), (width-1-xx)/(width*.10),
+                              yy/(height*.06), (height-1-yy)/(height*.06)])
+    alpha = (np.clip(edge,0,1)*145).astype("uint8")
+    rgba = np.dstack([rgb,alpha])
+    img = Image.fromarray(rgba,"RGBA").filter(ImageFilter.GaussianBlur(2))
+    out=io.BytesIO()
+    img.save(out,format="PNG",optimize=True)
+    return out.getvalue()
+
+
 def map_task(stations):
-    st.markdown('<div class="sec">02 / AIRVISION MAP EXPLORER</div>', unsafe_allow_html=True)
-    st.caption(f"Khám phá chất lượng không khí tại {SELECTED_CITY} · lưới dự báo Open-Meteo · European AQI. Các điểm màu là giá trị mô hình, KHÔNG phải trạm đo.")
-    try:
-        grid = _map_grid(SELECTED_CITY)
-    except Exception as exc:
-        st.error(f"Chưa tải được bản đồ dự báo từ Open-Meteo ({type(exc).__name__}). Hãy thử lại sau.")
-        return
-    if grid.empty:
-        st.warning("API chưa cung cấp dữ liệu dự báo theo tọa độ.")
-        return
-    now = pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").tz_localize(None)
-    available = sorted(grid["timestamp"].dropna().unique())
-    future = [t for t in available if pd.Timestamp(t) >= now.floor("h")]
-    if not future: future = available
-    offsets = [0, 3, 6, 12, 24]
-    valid_offsets = [h for h in offsets if h < len(future)]
-    if not valid_offsets:
-        st.warning("Không có khung giờ dự báo hợp lệ.")
-        return
-    c1, c2, c3 = st.columns([1, 1.2, 1.4])
-    with c1:
-        metric = st.selectbox("Chỉ số xem chi tiết", list(MAP_METRICS), key="map_layer")
-    with c2:
-        hour = st.select_slider("Mốc dự báo", options=valid_offsets,
-                                format_func=lambda h: "Hiện tại" if h == 0 else f"+{h} giờ",
-                                key="map_forecast_hour")
-    with c3:
-        style = st.selectbox("Kiểu bản đồ", ["Nền tối", "Nền sáng"], key="map_style")
-    ts = pd.Timestamp(future[hour])
-    frame = grid[grid["timestamp"] == ts].dropna(subset=[metric]).copy()
-    if frame.empty:
-        st.info("Chưa có giá trị cho chỉ số và mốc giờ đã chọn.")
-        return
-    frame["aqi_color"] = frame["AQI"].apply(_aqi_color)
-    frame["value_text"] = frame[metric].map(lambda x: f"{x:.1f}")
-    frame["when"] = ts.strftime("%d/%m/%Y %H:%M")
-    view_mode = st.radio("Chế độ", ["Vùng màu cảnh báo", "Vùng màu + điểm", "Điểm dự báo"],
-                         horizontal=True, key="map_view_mode")
-    st.caption("Bản đồ màu mô phỏng từ các điểm dự báo Open-Meteo. Không phải đo đạc liên tục hay ranh giới ô nhiễm chính xác.")
+    import folium
+    import streamlit.components.v1 as components
 
-    layers = []
-    if view_mode != "Điểm dự báo":
-        rows = sorted(frame.latitude.unique())
-        cols = sorted(frame.longitude.unique())
-        lookup = {(float(r.latitude), float(r.longitude)): float(r["AQI"])
-                  for _, r in frame.iterrows() if pd.notna(r["AQI"])}
-        if len(rows) >= 2 and len(cols) >= 2 and len(lookup) == len(rows) * len(cols):
-            matrix = np.array([[lookup[(float(y), float(x))] for x in cols] for y in rows])
-            layers.append(pdk.Layer(
-                "PolygonLayer", _heat_cells(matrix, rows, cols),
-                get_polygon="polygon", get_fill_color="color",
-                stroked=False, pickable=False, opacity=1.0,
-            ))
-        else:
-            st.warning("Không đủ dữ liệu lưới để dựng vùng màu; đang hiển thị điểm dự báo.")
-            view_mode = "Điểm dự báo"
-
-    if view_mode in ("Vùng màu + điểm", "Điểm dự báo"):
-        frame["marker_color"] = frame["AQI"].apply(lambda v: _aqi_color(v)[:3] + [230])
-        layers.append(pdk.Layer("ScatterplotLayer", frame,
-                                get_position="[longitude, latitude]",
-                                get_radius=5, radius_units="pixels",
-                                radius_min_pixels=4, radius_max_pixels=7,
-                                get_fill_color="marker_color", get_line_color=[245, 250, 255, 220],
-                                line_width_min_pixels=1, stroked=True, filled=True,
-                                pickable=True))
-    map_style = "dark" if style == "Nền tối" else "light"
-    deck = pdk.Deck(layers=layers,
-                    initial_view_state=pdk.ViewState(latitude=CITY_LAT, longitude=CITY_LON,
-                                                     zoom=9.0, pitch=0),
-                    map_style=map_style,
-                    tooltip={"html": "<b>{site}</b><br/>AQI: {AQI}<br/>PM2.5: {PM2.5} µg/m³<br/>PM10: {PM10} µg/m³<br/>{when}<br/><i>Dự báo mô hình Open-Meteo</i>",
-                             "style": {"backgroundColor": "#10252d", "color": "#e9fcff"}})
-    st.pydeck_chart(deck, use_container_width=True, height=540)
-    st.markdown("""<div style="height:10px;border-radius:99px;margin:6px 0 2px;
-background:linear-gradient(90deg,#4a80c4 0%,#78b2d6 13%,#eee278 27%,#f5aa3c 40%,#e25050 53%,#aa286e 67%,#64143c 100%)"></div>
-<div style="display:flex;justify-content:space-between;font-size:.72rem;color:#91a9b8">
-<span>0 Tốt</span><span>40 Trung bình</span><span>80 Kém</span><span>100 Rất kém</span><span>150+ Cực kỳ kém</span></div>""",
+    st.markdown('<div class="sec">02 / AIRVISION ATMOSPHERIC MAP</div>',
                 unsafe_allow_html=True)
-    st.caption("Vùng màu được nội suy từ các điểm dự báo mô hình Open-Meteo (European AQI), không phải đo đạc trạm.")
-    m1, m2, m3 = st.columns(3)
-    m1.metric(f"{metric} thấp nhất", f"{frame[metric].min():.1f}")
-    m2.metric(f"{metric} trung bình", f"{frame[metric].mean():.1f}")
-    m3.metric(f"{metric} cao nhất", f"{frame[metric].max():.1f}")
-    with st.expander(f"◉ So sánh {len(frame)} điểm dự báo", expanded=False):
-        table = frame[["site", "latitude", "longitude", "AQI", "PM2.5", "PM10"]].sort_values(metric)
-        st.dataframe(table, hide_index=True, use_container_width=True)
-        st.download_button("Tải CSV các điểm dự báo", table.to_csv(index=False).encode("utf-8-sig"),
-                           file_name=f"airvision_{SELECTED_CITY}_{ts:%Y%m%d_%H%M}.csv", mime="text/csv")
-    if not stations.empty and {"latitude", "longitude", "station"}.issubset(stations.columns) and "AQI" in stations:
-        st.caption("Dữ liệu trạm thực tế có thể được kết nối qua AQ_STATIONS_API; bản đồ lưới phía trên hiện chỉ thể hiện dự báo mô hình.")
-    st.caption("Các điểm lấy mẫu trên lưới đều, không phản ánh ranh giới hành chính. Độ phân giải nguồn mô hình có thể khiến nhiều điểm lân cận trùng giá trị; đây không phải bản đồ đo đạc chi tiết từng phường.")
+    st.caption("Bản đồ dự báo nhiều tỉnh thành · Open-Meteo · dữ liệu mô hình, không phải trạm đo")
+    c1,c2=st.columns([1,2])
+    with c1:
+        metric=st.selectbox("Lớp dữ liệu",list(MAP_METRICS),key="map_layer")
+    with c2:
+        hour=st.select_slider("Thời gian",options=[0,3,6,12,24],
+                              format_func=lambda x:"Hiện tại" if x==0 else f"+{x} giờ",
+                              key="map_forecast_hour")
+
+    try:
+        with st.spinner("Đang tải lớp dự báo trên toàn Việt Nam (lần đầu có thể lâu hơn)..."):
+            national=_vietnam_grid()
+    except Exception as exc:
+        st.error(f"Không tải được dữ liệu toàn quốc: {type(exc).__name__}. "
+                 "Thử lại sau hoặc kiểm tra giới hạn API Open-Meteo.")
+        return
+    if national.empty:
+        st.warning("Nguồn dự báo chưa trả về dữ liệu.")
+        return
+
+    now=pd.Timestamp.now(tz="Asia/Ho_Chi_Minh").tz_localize(None)
+    times=sorted(national.timestamp.dropna().unique())
+    future=[pd.Timestamp(t) for t in times if pd.Timestamp(t)>=now.floor("h")]
+    if not future:
+        future=[pd.Timestamp(t) for t in times]
+    ts=future[min(hour,len(future)-1)]
+    frame=national[national.timestamp==ts].dropna(subset=[metric])
+    png=_overlay_png(frame,metric)
+    if png is None:
+        st.warning("Lưới dự báo toàn quốc không đủ dữ liệu để tạo lớp màu.")
+        return
+
+    # Khởi tạo quanh tỉnh/thành đã chọn; zoom ra vẫn thấy lớp màu toàn quốc.
+    m=folium.Map(location=[CITY_LAT,CITY_LON],zoom_start=8,
+                 tiles="CartoDB dark_matter",control_scale=True,
+                 prefer_canvas=True)
+    folium.raster_layers.ImageOverlay(
+        image="data:image/png;base64,"+base64.b64encode(png).decode("ascii"),
+        bounds=[[8.3,102.2],[23.0,109.9]],opacity=.9,
+        interactive=False,name="Dự báo Việt Nam",zindex=2).add_to(m)
+
+    # Đánh dấu tỉnh được chọn rất nhỏ, không che mất lớp màu.
+    folium.CircleMarker(
+        [CITY_LAT,CITY_LON],radius=4,color="#ffffff",weight=1,
+        fill=True,fill_color="#21ddc5",fill_opacity=1,
+        tooltip=f"Địa phương đang chọn: {SELECTED_CITY}").add_to(m)
+
+    components.html(m.get_root().render(),height=590,scrolling=False)
+    if metric=="AQI":
+        st.markdown("""<div style="height:7px;border-radius:12px;
+        background:linear-gradient(90deg,#4a80c4,#78b2d6,#eee278,#f5aa3c,#e25050,#aa286e,#64143c)"></div>
+        <div style="display:flex;justify-content:space-between;color:#9ab7c4;font-size:12px;margin-top:7px">
+        <span>0 · Tốt</span><span>40 · Trung bình</span><span>80 · Kém</span>
+        <span>100 · Rất kém</span><span>150+ · Cực kỳ kém</span></div>""",
+        unsafe_allow_html=True)
+    else:
+        st.caption(f"Thang màu {metric} chỉ thể hiện mức nồng độ tương đối trên toàn vùng.")
+    st.caption("Zoom xa để xem nhiều tỉnh. Vùng màu là nội suy từ 135 tọa độ dự báo "
+               "trên lãnh thổ và khu vực lân cận Việt Nam; không chính xác đến cấp đường phố. "
+               "Hiện hỗ trợ Việt Nam, chưa tự tải dữ liệu ngoài phạm vi này.")
+    a,b,c=st.columns(3)
+    a.metric(f"{metric} thấp nhất",f"{frame[metric].min():.1f}")
+    b.metric(f"{metric} trung bình",f"{frame[metric].mean():.1f}")
+    c.metric(f"{metric} cao nhất",f"{frame[metric].max():.1f}")
 
 def forecast_task(df):
     st.markdown('<div class="sec">03 / Dự báo chất lượng không khí</div>', unsafe_allow_html=True)
