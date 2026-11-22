@@ -931,21 +931,32 @@ def _aqi_to_rgb(values):
     chans = [np.interp(values, xs, [s[1][c] for s in AQI_COLOR_STOPS]) for c in range(3)]
     return np.stack(chans, axis=-1)
 
-def _heat_image_uri(matrix, size=360, max_alpha=170):
-    """Nội suy bicubic ma trận AQI (hàng 0 = vĩ độ nhỏ nhất) thành ảnh PNG
-    mịn, mờ dần ở mép, trả về data-URI cho BitmapLayer."""
+def _heat_cells(matrix, rows, cols, n=80, max_alpha=170):
+    """Nội suy bicubic ma trận AQI (hàng 0 = vĩ độ nhỏ nhất) thành lưới n×n ô nhỏ,
+    màu liên tục và mờ dần ở mép. Trả về list dict cho PolygonLayer
+    (không dùng data-URI vì pydeck hiểu nhầm chuỗi đó là biểu thức JS)."""
     m = np.nan_to_num(matrix, nan=float(np.nanmean(matrix))).astype("float32")
-    img = Image.fromarray(np.ascontiguousarray(m[::-1])).resize((size, size), Image.BICUBIC)
-    arr = np.asarray(img, dtype="float32")
+    arr = np.asarray(Image.fromarray(m, mode="F").resize((n, n), Image.BICUBIC), dtype="float32")
     rgb = _aqi_to_rgb(arr)
-    t = np.linspace(0, 1, size)
+    t = (np.arange(n) + 0.5) / n
     fade = np.clip(np.minimum(t, 1 - t) / 0.18, 0, 1)
     fade = fade * fade * (3 - 2 * fade)          # smoothstep
     alpha = np.outer(fade, fade) * max_alpha
-    rgba = np.dstack([rgb, alpha]).clip(0, 255).astype("uint8")
-    buf = io.BytesIO()
-    Image.fromarray(rgba).save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    lat_axis = np.linspace(float(rows[0]), float(rows[-1]), n + 1)
+    lon_axis = np.linspace(float(cols[0]), float(cols[-1]), n + 1)
+    cells = []
+    for i in range(n):
+        y0, y1 = float(lat_axis[i]), float(lat_axis[i + 1])
+        for j in range(n):
+            a = int(alpha[i, j])
+            if a < 4:
+                continue
+            x0, x1 = float(lon_axis[j]), float(lon_axis[j + 1])
+            cells.append({
+                "polygon": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]],
+                "color": [int(rgb[i, j, 0]), int(rgb[i, j, 1]), int(rgb[i, j, 2]), a],
+            })
+    return cells
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1034,10 +1045,9 @@ def map_task(stations):
         if len(rows) >= 2 and len(cols) >= 2 and len(lookup) == len(rows) * len(cols):
             matrix = np.array([[lookup[(float(y), float(x))] for x in cols] for y in rows])
             layers.append(pdk.Layer(
-                "BitmapLayer",
-                image=_heat_image_uri(matrix),
-                bounds=[float(cols[0]), float(rows[0]), float(cols[-1]), float(rows[-1])],
-                opacity=1.0,
+                "PolygonLayer", _heat_cells(matrix, rows, cols),
+                get_polygon="polygon", get_fill_color="color",
+                stroked=False, pickable=False, opacity=1.0,
             ))
         else:
             st.warning("Không đủ dữ liệu lưới để dựng vùng màu; đang hiển thị điểm dự báo.")
